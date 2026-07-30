@@ -10,7 +10,7 @@ import {
   transportFor, newMessageId, unsubscribeUrl, appendTrackingPixel,
   rewriteLinksForTracking, textToHtml, type OutboundEmail,
 } from '../../lib/email/send'
-import { rescoreContact } from '../../lib/leads/scoring'
+import { ingestInbound } from '../../lib/email/receive'
 import type { EnrollmentStatus, SequenceStep } from '@prisma/client'
 
 /**
@@ -701,8 +701,17 @@ export async function enrollContacts({
 }
 
 /**
- * Records an inbound reply and stops what should stop. Called by the mailbox
- * poller (Gmail/IMAP) and by the SES inbound webhook.
+ * Records an inbound reply, by way of the ingestion pipeline.
+ *
+ * Kept as a convenience for callers that already know the contact — a manual
+ * "log a reply" action, and the tests below. It used to contain its own logic,
+ * and that logic was naive in a way that mattered: it stopped the sequence,
+ * marked the contact engaged and filed a task for *every* inbound message. An
+ * out-of-office would end the sequence; an unsubscribe request would not
+ * suppress. Both are silent failures.
+ *
+ * So it now delegates to `ingestInbound`, which classifies first. There is one
+ * decision about what a reply means, and it lives in `email/classify.ts`.
  */
 export async function recordReply({
   tenantId,
@@ -719,71 +728,25 @@ export async function recordReply({
   messageId?: string
   inReplyTo?: string
 }) {
-  return withTenant(tenantId, async () => {
-    const contact = await db().contact.findUniqueOrThrow({ where: { id: contactId } })
+  const contact = await withTenant(tenantId, () =>
+    db().contact.findUniqueOrThrow({ where: { id: contactId } })
+  )
 
-    await db().emailMessage.create({
-      data: {
-        tenantId: tid(),
-        direction: 'inbound',
-        status: 'replied',
-        contactId,
-        fromEmail: contact.email ?? 'unknown',
-        toEmail: '',
-        subject,
-        bodyText,
-        messageId,
-        inReplyTo,
-        repliedAt: new Date(),
-      },
-    })
-
-    await db().contact.update({
-      where: { id: contactId },
-      data: { lastRepliedAt: new Date(), status: 'engaged' },
-    })
-
-    const stopped = await db().sequenceEnrollment.updateMany({
-      where: { contactId, status: 'active' },
-      data: {
-        status: 'stopped_replied',
-        stoppedAt: new Date(),
-        stopReason: 'Contact replied',
-        nextRunAt: null,
-      },
-    })
-
-    await db().activity.create({
-      data: {
-        tenantId: tid(),
-        type: 'reply',
-        summary: `Replied: ${subject}`.slice(0, 200),
-        contactId,
-        accountId: contact.accountId,
-      },
-    })
-
-    // A reply is the strongest buying signal we have; a follow-up task means it
-    // does not sit unread in a shared inbox.
-    if (contact.ownerId) {
-      await db().task.create({
-        data: {
-          tenantId: tid(),
-          type: 'follow_up',
-          title: `Reply from ${contact.firstName ?? contact.email}`,
-          note: bodyText.slice(0, 500),
-          contactId,
-          accountId: contact.accountId,
-          assigneeId: contact.ownerId,
-          dueAt: new Date(),
-          priority: 3,
-        },
-      })
-    }
-
-    await rescoreContact(contactId)
-    return { stoppedEnrollments: stopped.count }
+  const result = await ingestInbound(tenantId, {
+    messageId: messageId ?? `<manual-${contactId}-${Date.now()}@salesengine.local>`,
+    inReplyTo: inReplyTo ?? null,
+    fromEmail: contact.email ?? `unknown-${contactId}@invalid.local`,
+    toEmail: '',
+    subject,
+    bodyText,
+    receivedAt: new Date(),
   })
+
+  return {
+    stoppedEnrollments: result.ok
+      ? Number(/stopped (\d+) enrollment/.exec(result.actions.join(' '))?.[1] ?? 0)
+      : 0,
+  }
 }
 
 /** Fans out due enrollments. Kept here so the tick and the machine live together. */

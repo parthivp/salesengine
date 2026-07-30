@@ -1,6 +1,7 @@
 import type { JobMap, JobName } from '../lib/queue'
 import { logger } from '../lib/logger'
 import { prismaAdmin } from '../lib/db'
+import { pollDueMailboxes, pollMailbox } from './jobs/replies'
 import { enrichContacts, enrichAccounts, recomputeScores } from './jobs/enrichment'
 import { processEnrollmentStep, enrollContacts, sequenceTick as tick } from './jobs/sequence'
 import { crmPull, crmPush, crmSyncAll, crmSyncDue, crmLogActivity } from './jobs/crm'
@@ -60,7 +61,8 @@ export const handlers: { [N in JobName]?: Handler<N> } = {
   'sequence:step': processEnrollmentStep,
   'sequence:enroll': enrollContacts,
   'email:send': notYetImplemented('Phase 3'),
-  'email:poll-replies': notYetImplemented('Phase 3'),
+  'email:poll-replies': pollMailbox,
+  'email:poll-due': pollDueMailboxes,
   'enrichment:contact': enrichContacts,
   'enrichment:account': enrichAccounts,
   'crm:pull': crmPull,

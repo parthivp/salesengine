@@ -6,7 +6,7 @@ import { formatNumber, formatRelative } from '@/lib/utils'
 import { assessReputation, REPUTATION_LIMITS } from '@/lib/email/deliverability'
 import { sendingEnabled } from '@/lib/email/send'
 import { Mail, ShieldCheck, ShieldAlert } from 'lucide-react'
-import { AddMailbox, RecheckButton } from './client'
+import { AddMailbox, RecheckButton, ImapPanel } from './client'
 import type { MailboxHealth } from '@prisma/client'
 
 export const metadata = { title: 'Mailboxes · SalesEngine' }
@@ -41,7 +41,18 @@ export default async function MailboxesPage() {
           db().emailMessage.count({ where: { mailboxId: m.id, status: 'bounced' } }),
           db().emailMessage.count({ where: { mailboxId: m.id, status: 'complained' } }),
         ])
-        return { ...m, stats: { sent, bounced, complained }, verdict: assessReputation({ sent, bounced, complained }) }
+        // Only the non-secret parts of the credential blob reach the client. The
+        // sealed password stays on the server; a mailbox password rendered into a
+        // page is an account takeover one screenshot away.
+        const imapRaw = (m.credentials as { imap?: { host?: string; user?: string } } | null)?.imap
+        const imap = imapRaw?.host ? { host: imapRaw.host, user: imapRaw.user ?? null } : null
+        const { credentials: _credentials, ...safe } = m
+        return {
+          ...safe,
+          imap,
+          stats: { sent, bounced, complained },
+          verdict: assessReputation({ sent, bounced, complained }),
+        }
       })
     )
   })
@@ -155,6 +166,16 @@ export default async function MailboxesPage() {
 
                         <RecheckButton mailboxId={m.id} />
                       </div>
+
+                      <ImapPanel
+                        mailboxId={m.id}
+                        email={m.email}
+                        configured={Boolean(m.imap)}
+                        host={m.imap?.host ?? null}
+                        user={m.imap?.user ?? null}
+                        lastPolledAt={m.imapLastPolledAt ? formatRelative(m.imapLastPolledAt) : null}
+                        lastError={m.imapLastError}
+                      />
                     </li>
                   )
                 })}

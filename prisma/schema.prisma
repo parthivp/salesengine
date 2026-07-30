@@ -654,6 +654,13 @@ model Mailbox {
   bounceRate    Float @default(0)
   complaintRate Float @default(0)
 
+  // Reply polling cursor. A UID rather than a timestamp: UIDs are monotonic per
+  // folder, while IMAP's SINCE has one-day granularity and server clocks drift,
+  // so a date cursor either re-reads a whole day or loses mail.
+  imapLastUid      Int?
+  imapLastPolledAt DateTime?
+  imapLastError    String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

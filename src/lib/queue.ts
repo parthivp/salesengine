@@ -50,6 +50,7 @@ export type JobMap = {
   'sequence:enroll': { tenantId: string; sequenceId: string; contactIds: string[]; enrolledById?: string }
   'email:send': { tenantId: string; messageId: string }
   'email:poll-replies': { tenantId: string; mailboxId: string }
+  'email:poll-due': Record<string, never>
   'enrichment:contact': { tenantId: string; contactIds: string[] }
   'enrichment:account': { tenantId: string; accountIds: string[] }
   'crm:pull': { tenantId: string; connectionId: string; object: string }
@@ -78,6 +79,7 @@ const JOB_QUEUE: Record<JobName, QueueName> = {
   'sequence:enroll': QUEUE.sequence,
   'email:send': QUEUE.email,
   'email:poll-replies': QUEUE.email,
+  'email:poll-due': QUEUE.email,
   'enrichment:contact': QUEUE.enrichment,
   'enrichment:account': QUEUE.enrichment,
   'crm:pull': QUEUE.crmSync,
@@ -117,6 +119,14 @@ export async function registerRepeatables() {
     'maintenance:expire-sessions',
     {},
     { repeat: { pattern: '30 3 * * *' }, jobId: 'repeat:expire-sessions' }
+  )
+  // Replies every 3 minutes. Fast enough that a hot prospect is not left waiting,
+  // slow enough that IMAP servers do not start rate-limiting; the per-mailbox job
+  // has its own floor so this cadence is a ceiling, not a guarantee.
+  await queue(QUEUE.email).add(
+    'email:poll-due',
+    {},
+    { repeat: { every: 180_000 }, jobId: 'repeat:email:poll-due' }
   )
   // Every 15 minutes. Salesforce daily API limits make anything tighter
   // expensive for little benefit; near-real-time comes from change events.

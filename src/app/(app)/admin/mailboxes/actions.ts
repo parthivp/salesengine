@@ -8,6 +8,8 @@ import { checkDomainAuth, maySend, type AuthCheck } from '@/lib/email/deliverabi
 import { domainFromEmail } from '@/lib/utils'
 import { audit } from '@/lib/audit'
 import { warmupCap } from '@/lib/email/schedule'
+import { seal } from '@/lib/crypto'
+import { logger } from '@/lib/logger'
 
 export type MailboxResult =
   | { ok: true; auth?: AuthCheck; blockers?: string[] }
@@ -105,5 +107,101 @@ export async function recheckMailbox(mailboxId: string): Promise<MailboxResult> 
     return { ok: true, auth: dns, blockers: verdict.blockers }
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : 'Check failed.' }
+  }
+}
+
+// --- reply polling ----------------------------------------------------------
+
+const imapSchema = z.object({
+  mailboxId: z.string().min(1),
+  host: z.string().trim().min(3).max(255),
+  port: z.coerce.number().int().min(1).max(65535).default(993),
+  user: z.string().trim().min(1).max(320),
+  password: z.string().min(1).max(1024),
+  mailbox: z.string().trim().max(255).default('INBOX'),
+})
+
+/**
+ * Stores IMAP details so replies can be pulled in.
+ *
+ * The password is sealed with AES-256-GCM before it touches the row, and is never
+ * read back out to the browser — the UI can see that IMAP is configured and for
+ * which user, never the secret. A mailbox password is a full account takeover if
+ * it leaks, and "show the current value so the user can check it" is how that
+ * happens.
+ */
+export async function configureImap(input: z.input<typeof imapSchema>): Promise<MailboxResult> {
+  const auth = await requirePermission('mailbox:update')
+  const parsed = imapSchema.safeParse(input)
+  if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? 'Invalid input.' }
+  const d = parsed.data
+
+  try {
+    await withTenant(auth.tenant.id, async () => {
+      const mailbox = await db().mailbox.findUniqueOrThrow({ where: { id: d.mailboxId } })
+      const credentials = (mailbox.credentials ?? {}) as Record<string, unknown>
+
+      await db().mailbox.update({
+        where: { id: d.mailboxId },
+        data: {
+          credentials: {
+            ...credentials,
+            imap: {
+              host: d.host,
+              port: d.port,
+              secure: true,
+              user: d.user,
+              password: seal(d.password),
+              mailbox: d.mailbox || 'INBOX',
+            },
+          } as never,
+          // Start from the current end of the folder rather than 0. A first poll
+          // of an old mailbox would otherwise ingest years of history, stopping
+          // sequences on decade-old threads and filing hundreds of tasks.
+          imapLastUid: null,
+          imapLastError: null,
+          imapLastPolledAt: null,
+        },
+      })
+
+      await audit({
+        actorId: auth.user.id,
+        action: 'connect',
+        entity: 'Mailbox',
+        entityId: d.mailboxId,
+        after: { imap: { host: d.host, user: d.user, mailbox: d.mailbox } },
+      })
+    })
+
+    revalidatePath('/admin/mailboxes')
+    revalidatePath('/inbox')
+    return { ok: true }
+  } catch (err) {
+    logger.error({ err, mailboxId: d.mailboxId }, 'could not save IMAP settings')
+    return { ok: false, error: 'Could not save those settings.' }
+  }
+}
+
+/** Removes IMAP details. Replies stop arriving; nothing already ingested changes. */
+export async function disableImap(mailboxId: string): Promise<MailboxResult> {
+  const auth = await requirePermission('mailbox:update')
+  try {
+    await withTenant(auth.tenant.id, async () => {
+      const mailbox = await db().mailbox.findUniqueOrThrow({ where: { id: mailboxId } })
+      const credentials = { ...((mailbox.credentials ?? {}) as Record<string, unknown>) }
+      delete credentials.imap
+      await db().mailbox.update({
+        where: { id: mailboxId },
+        data: { credentials: credentials as never, imapLastError: null },
+      })
+      await audit({
+        actorId: auth.user.id, action: 'disconnect', entity: 'Mailbox', entityId: mailboxId,
+      })
+    })
+    revalidatePath('/admin/mailboxes')
+    return { ok: true }
+  } catch (err) {
+    logger.error({ err, mailboxId }, 'could not disable IMAP')
+    return { ok: false, error: 'Could not disable reply polling.' }
   }
 }

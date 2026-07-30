@@ -20,7 +20,8 @@
     "db:seed-demo": "tsx scripts/seed-demo.ts",
     "db:rescore": "tsx scripts/rescore.ts",
     "db:seed-sequences": "tsx scripts/seed-sequences.ts",
-    "start:standalone": "./scripts/prepare-standalone.sh && node .next/standalone/server.js"
+    "start:standalone": "./scripts/prepare-standalone.sh && node .next/standalone/server.js",
+    "db:seed-crm": "tsx scripts/seed-crm.ts"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"

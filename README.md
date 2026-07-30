@@ -18,8 +18,8 @@ See [PLAN.md](./PLAN.md) for the full feature set, architecture and delivery roa
 | 1 | Foundation — tenancy + RLS, auth, RBAC, teams, audit log | **Shipped** |
 | 2 | Lead database — contacts, accounts, CSV import, capture, Apollo enrichment, scoring | **Shipped** |
 | 3 | Email engine — SES, mailboxes, sequences, scheduler, deliverability | **Shipped** |
-| 4 | CRM — connector layer, Salesforce adapter, field mapping, sync | Next |
-| 5 | Workflow — tasks, follow-ups, pipeline, reporting | Planned |
+| 4 | CRM — connector layer, Salesforce adapter, field mapping, sync | **Shipped** |
+| 5 | Workflow — tasks, follow-ups, pipeline, reporting | Next |
 | 6 | LinkedIn — Sales Nav import, AI drafting, human-in-the-loop queue | Planned |
 | 7 | Scale-out — HubSpot adapter, public API, webhooks | Planned |
 | 8 | Commercial — Stripe billing, self-serve signup | Planned |
@@ -67,7 +67,7 @@ Boots Postgres, Redis, migrations, the app and the worker. This is what runs on 
 | `APOLLO_API_KEY` | Lead search and enrichment (Phase 2). |
 | `EMAIL_TRANSPORT` | `log` \| `ses` \| `auto`. **Set `log` anywhere that is not production.** |
 | `AWS_*`, `SES_CONFIGURATION_SET` | Email sending via SES. |
-| `SALESFORCE_CLIENT_*` | CRM connected app (Phase 4). |
+| `SALESFORCE_CLIENT_*` | Salesforce Connected App, for CRM sync. |
 
 The app validates all of these at boot and refuses to start on a bad config — a missing
 `AUTH_SECRET` in production should be a crash, not a silently forgeable session.
@@ -92,7 +92,7 @@ Layer 3 is the one that matters: a forgotten `where` clause, a raw query, or a f
 still cannot read or write another tenant's data.
 
 ```bash
-npm test    # 93 tests, incl. 6 that try and fail to cross the tenant boundary
+npm test    # 133 tests, incl. 6 that try and fail to cross the tenant boundary
 ```
 
 ---
@@ -116,6 +116,12 @@ src/
     crypto.ts              AES-256-GCM sealing, token hashing
     queue.ts               BullMQ queues, job registry, repeatables
     audit.ts               append-only trail
+    crm/
+      types.ts             the CrmAdapter contract
+      mapping.ts           field mapping, transforms, conflict resolution
+      sync.ts              the sync engine: echo suppression, watermarks, conflicts
+      salesforce.ts        first adapter
+      fake.ts              in-memory CRM used to test convergence
     email/
       merge.ts             merge-tag rendering with fallbacks
       schedule.ts          sending windows, timezones, mailbox capacity
@@ -127,6 +133,7 @@ src/
     jobs/
       sequence.ts          the step machine, enrollment, reply handling
       enrichment.ts        Apollo enrichment and rescoring
+      crm.ts               sync jobs, OAuth token refresh
 ```
 
 ---
@@ -148,6 +155,29 @@ The engine also refuses to send in these cases rather than sending something wro
 - every mailbox at its daily cap — it defers instead
 - the contact replied, unsubscribed, bounced, or a colleague at the same account replied
 - bounce or complaint rates approaching the AWS thresholds
+
+---
+
+## CRM sync
+
+One internal contract (`CrmAdapter`), many adapters. Everything expensive — the sync engine,
+field mapping, conflict resolution, watermarks, retry — sits *above* that interface, so the
+second adapter costs a fraction of the first.
+
+The engine's defining risk is the echo loop: in bidirectional sync, a write can bounce between
+systems forever, burning API quota while appearing to work. Two things prevent it:
+
+- only the **mapped projection** is hashed, so a change to an unmapped field is not a change;
+- empty and absent values hash identically, so a record pulled from a CRM that leaves a field
+  blank does not immediately look "changed" and get pushed back.
+
+Both are covered by tests that run five full sync cycles and assert zero writes after the first.
+
+Conflicts are resolved from an explicit per-connection policy (newest wins / CRM wins / app
+wins / ask me). When the policy cannot decide — both sides changed and timestamps are missing
+or identical — the record is **flagged rather than guessed**, and neither version is
+overwritten until a human chooses. Some local fields (`score`, `unsubscribedAt`, `tenantId`)
+can never be written by a CRM, whatever the mapping says.
 
 ---
 

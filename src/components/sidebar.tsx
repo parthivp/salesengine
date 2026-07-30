@@ -49,7 +49,7 @@ const SECTIONS: { title: string; items: Item[] }[] = [
     items: [
       { href: '/admin/users', label: 'Users & teams', icon: Users, permission: 'user:read' },
       { href: '/admin/mailboxes', label: 'Mailboxes', icon: Mail, permission: 'mailbox:read' },
-      { href: '/admin/integrations', label: 'Integrations', icon: Plug, permission: 'integration:read', phase: 4 },
+      { href: '/admin/integrations', label: 'Integrations', icon: Plug, permission: 'integration:read' },
       { href: '/admin/settings', label: 'Settings', icon: Settings, permission: 'tenant:update' },
       { href: '/admin/audit', label: 'Audit log', icon: Shield, permission: 'audit:read' },
     ],

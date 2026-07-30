@@ -54,6 +54,17 @@ export type JobMap = {
   'enrichment:account': { tenantId: string; accountIds: string[] }
   'crm:pull': { tenantId: string; connectionId: string; object: string }
   'crm:push': { tenantId: string; connectionId: string; object: string; localIds: string[] }
+  'crm:sync': { tenantId: string; connectionId: string }
+  'crm:sync-due': Record<string, never>
+  'crm:log-activity': {
+    tenantId: string
+    connectionId: string
+    contactId: string
+    type: 'email' | 'call' | 'task' | 'note'
+    subject: string
+    body?: string
+    occurredAt: string
+  }
   'scoring:recompute': { tenantId: string; contactIds?: string[] }
   'maintenance:reset-daily-caps': Record<string, never>
   'maintenance:expire-sessions': Record<string, never>
@@ -71,6 +82,9 @@ const JOB_QUEUE: Record<JobName, QueueName> = {
   'enrichment:account': QUEUE.enrichment,
   'crm:pull': QUEUE.crmSync,
   'crm:push': QUEUE.crmSync,
+  'crm:sync': QUEUE.crmSync,
+  'crm:sync-due': QUEUE.crmSync,
+  'crm:log-activity': QUEUE.crmSync,
   'scoring:recompute': QUEUE.scoring,
   'maintenance:reset-daily-caps': QUEUE.maintenance,
   'maintenance:expire-sessions': QUEUE.maintenance,
@@ -103,6 +117,13 @@ export async function registerRepeatables() {
     'maintenance:expire-sessions',
     {},
     { repeat: { pattern: '30 3 * * *' }, jobId: 'repeat:expire-sessions' }
+  )
+  // Every 15 minutes. Salesforce daily API limits make anything tighter
+  // expensive for little benefit; near-real-time comes from change events.
+  await queue(QUEUE.crmSync).add(
+    'crm:sync-due',
+    {},
+    { repeat: { every: 900_000 }, jobId: 'repeat:crm:sync-due' }
   )
 }
 

@@ -4,6 +4,7 @@ import { prismaAdmin, withTenant, db } from '../lib/db'
 import { enqueue } from '../lib/queue'
 import { enrichContacts, enrichAccounts, recomputeScores } from './jobs/enrichment'
 import { processEnrollmentStep, enrollContacts, sequenceTick as tick } from './jobs/sequence'
+import { crmPull, crmPush, crmSyncAll, crmSyncDue, crmLogActivity } from './jobs/crm'
 
 type Handler<N extends JobName> = (data: JobMap[N]) => Promise<unknown>
 
@@ -63,8 +64,11 @@ export const handlers: { [N in JobName]?: Handler<N> } = {
   'email:poll-replies': notYetImplemented('Phase 3'),
   'enrichment:contact': enrichContacts,
   'enrichment:account': enrichAccounts,
-  'crm:pull': notYetImplemented('Phase 4'),
-  'crm:push': notYetImplemented('Phase 4'),
+  'crm:pull': crmPull,
+  'crm:push': crmPush,
+  'crm:sync': crmSyncAll,
+  'crm:sync-due': crmSyncDue,
+  'crm:log-activity': crmLogActivity,
   'scoring:recompute': recomputeScores,
   'maintenance:reset-daily-caps': resetDailyCaps,
   'maintenance:expire-sessions': expireSessions,

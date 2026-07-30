@@ -236,7 +236,40 @@ automated.
 | `npm test` | Vitest, incl. isolation tests |
 | `npm run typecheck` | `tsc --noEmit` |
 | `npm run lint` | ESLint (flat config) |
+| `npm run db:provision` | Role password, grants, and the row-level-security audit |
 | `node scripts/smoke.mjs` | Walk every route as each role; fails on any error or wrong authorization |
+
+## Deploying
+
+```bash
+cp .env.example .env      # fill in AUTH_SECRET, ENCRYPTION_KEY, APP_DB_PASSWORD
+docker compose up -d --build
+```
+
+The `migrate` service runs before the app and worker start, and does three things:
+applies migrations, sets the runtime role's password from `APP_DB_PASSWORD`, and
+**verifies that row-level security covers every tenant-scoped table**. If a table
+carrying a `tenantId` has no policy, it exits non-zero and the app never starts —
+a tenant-isolation hole fails the deploy rather than going live.
+
+Two database roles, and the distinction is load-bearing:
+
+| Role | Used by | Row-level security |
+|---|---|---|
+| `salesengine` (owner) | migrations, seeds, the platform-admin page | **bypassed** |
+| `salesengine_app` | app, worker — everything serving a request | enforced |
+
+Running the app as the owner turns tenant isolation off completely, while every
+application-level check goes on looking correct and every test goes on passing.
+The compose file wires this correctly and `deployment.test.ts` fails if that ever
+changes.
+
+To run the same checks against a database you provisioned by hand:
+
+```bash
+npm run db:deploy      # prisma migrate deploy
+npm run db:provision   # role password, grants, and the RLS audit
+```
 
 ## Dependency advisories
 

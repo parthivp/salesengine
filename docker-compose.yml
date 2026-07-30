@@ -32,15 +32,25 @@ services:
       timeout: 3s
       retries: 10
 
-  # Applies pending migrations, then exits. Both app and worker wait on it.
+  # Applies pending migrations, provisions the runtime role, and verifies that
+  # row-level security covers every tenant-scoped table — then exits. App and
+  # worker wait for it to succeed, so a missing RLS policy fails the deploy
+  # instead of silently shipping a table one tenant can read from another.
+  #
+  # Runs as the owner role, because it administers roles and schema.
   migrate:
     build:
       context: .
       target: runner
-    command: ['npx', 'prisma', 'migrate', 'deploy']
+    command:
+      - sh
+      - -c
+      - npx prisma migrate deploy && npx tsx scripts/provision-db.ts
     env_file: .env
     environment:
       DATABASE_URL: postgresql://salesengine:${POSTGRES_PASSWORD:-salesengine}@postgres:5432/salesengine?schema=public
+      DIRECT_DATABASE_URL: postgresql://salesengine:${POSTGRES_PASSWORD:-salesengine}@postgres:5432/salesengine?schema=public
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:?set APP_DB_PASSWORD in .env — it is the runtime database password}
     depends_on:
       postgres:
         condition: service_healthy
@@ -55,7 +65,10 @@ services:
     env_file: .env
     environment:
       NODE_ENV: production
-      DATABASE_URL: postgresql://salesengine:${POSTGRES_PASSWORD:-salesengine}@postgres:5432/salesengine?schema=public
+      # The RESTRICTED role, deliberately. Row-level security does not apply to
+      # the owner, so running the app as the owner turns tenant isolation off
+      # entirely — with every application-level check still looking correct.
+      DATABASE_URL: postgresql://salesengine_app:${APP_DB_PASSWORD:?set APP_DB_PASSWORD in .env}@postgres:5432/salesengine?schema=public
       REDIS_URL: redis://redis:6379
       PORT: '3000'
     ports:
@@ -78,7 +91,8 @@ services:
     env_file: .env
     environment:
       NODE_ENV: production
-      DATABASE_URL: postgresql://salesengine:${POSTGRES_PASSWORD:-salesengine}@postgres:5432/salesengine?schema=public
+      # Restricted role here too — the worker touches the same tenant data.
+      DATABASE_URL: postgresql://salesengine_app:${APP_DB_PASSWORD:?set APP_DB_PASSWORD in .env}@postgres:5432/salesengine?schema=public
       REDIS_URL: redis://redis:6379
     depends_on:
       migrate:

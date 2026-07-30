@@ -19,8 +19,8 @@ See [PLAN.md](./PLAN.md) for the full feature set, architecture and delivery roa
 | 2 | Lead database — contacts, accounts, CSV import, capture, Apollo enrichment, scoring | **Shipped** |
 | 3 | Email engine — SES, mailboxes, sequences, scheduler, deliverability | **Shipped** |
 | 4 | CRM — connector layer, Salesforce adapter, field mapping, sync | **Shipped** |
-| 5 | Workflow — tasks, follow-ups, pipeline, reporting | Next |
-| 6 | LinkedIn — Sales Nav import, AI drafting, human-in-the-loop queue | Planned |
+| 5 | Workflow — tasks, follow-ups, pipeline, reporting | **Shipped** |
+| 6 | LinkedIn — Sales Nav import, AI drafting, human-in-the-loop queue | Next |
 | 7 | Scale-out — HubSpot adapter, public API, webhooks | Planned |
 | 8 | Commercial — Stripe billing, self-serve signup | Planned |
 
@@ -92,7 +92,7 @@ Layer 3 is the one that matters: a forgotten `where` clause, a raw query, or a f
 still cannot read or write another tenant's data.
 
 ```bash
-npm test    # 133 tests, incl. 6 that try and fail to cross the tenant boundary
+npm test    # 166 tests, incl. 6 that try and fail to cross the tenant boundary
 ```
 
 ---
@@ -108,7 +108,7 @@ src/
   app/
     (auth)/                login, logout
     (app)/                 authenticated shell — dashboard, pipeline, outreach, admin
-  components/              sidebar, topbar, shared UI
+  components/              sidebar, topbar, shared UI, charts
   lib/
     db.ts                  Prisma clients, withTenant(), tenant context
     auth.ts                sessions, login, permission guards
@@ -122,6 +122,10 @@ src/
       sync.ts              the sync engine: echo suppression, watermarks, conflicts
       salesforce.ts        first adapter
       fake.ts              in-memory CRM used to test convergence
+    workflow/
+      tasks.ts             queue ordering, outcome chaining
+      pipeline.ts          rot detection, weighted forecast, stage moves
+      reports.ts           funnels, leaderboard, deliverability summary
     email/
       merge.ts             merge-tag rendering with fallbacks
       schedule.ts          sending windows, timezones, mailbox capacity
@@ -135,6 +139,27 @@ src/
       enrichment.ts        Apollo enrichment and rescoring
       crm.ts               sync jobs, OAuth token refresh
 ```
+
+---
+
+## Numbers we refuse to show
+
+Three places deliberately show a dash instead of a figure, because the figure would
+be worse than nothing:
+
+- **Rates under a meaningful sample.** A rep with 3 sends and 1 reply is not a 33%
+  performer. Rates below 20 sends (50 for deliverability) return null.
+- **Win rate with nothing closed.** Computed over closed deals only — including open
+  ones understates it early in a quarter and makes it useless for comparison.
+- **Unparseable numbers pushed to a CRM.** `"unknown"` employees becomes null, not 0.
+
+The leaderboard is also ranked by outcomes — won value, meetings, replies — never by
+emails sent. Ranking on volume rewards exactly the behaviour that burns a domain.
+
+Charts follow the bundled data-viz method: palettes were run through its validator
+against this app's actual surface rather than chosen by eye, every chart has a table
+twin so no value is reachable only by hover, and the funnel uses a single-hue ordinal
+ramp (a value-ramp on ordered stages) rather than categorical colour.
 
 ---
 

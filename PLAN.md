@@ -3,7 +3,7 @@
 A multi-tenant sales engagement platform: Apollo-style lead intelligence + Dripify-style
 sequenced outreach + CRM sync, built for an internal sales team first and a SaaS product second.
 
-**Status:** Phases 0–4 shipped → Phase 5 (tasks, pipeline, reporting) next
+**Status:** Phases 0–5 shipped → Phase 6 (LinkedIn human-in-the-loop queue) next
 **Owner:** Parthiv
 **Last updated:** 2026-07-30
 

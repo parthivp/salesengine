@@ -21,7 +21,9 @@
     "db:rescore": "tsx scripts/rescore.ts",
     "db:seed-sequences": "tsx scripts/seed-sequences.ts",
     "start:standalone": "./scripts/prepare-standalone.sh && node .next/standalone/server.js",
-    "db:seed-crm": "tsx scripts/seed-crm.ts"
+    "db:seed-crm": "tsx scripts/seed-crm.ts",
+    "db:seed-workflow": "tsx scripts/seed-workflow.ts",
+    "db:seed-owner-tasks": "tsx scripts/seed-owner-tasks.ts"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"

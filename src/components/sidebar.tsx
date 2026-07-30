@@ -23,7 +23,7 @@ const SECTIONS: { title: string; items: Item[] }[] = [
     title: 'Work',
     items: [
       { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
-      { href: '/tasks', label: 'My tasks', icon: ListChecks, phase: 5 },
+      { href: '/tasks', label: 'My tasks', icon: ListChecks },
       { href: '/inbox', label: 'Inbox', icon: Inbox },
       { href: '/linkedin', label: 'LinkedIn queue', icon: Linkedin, phase: 6 },
     ],
@@ -33,7 +33,7 @@ const SECTIONS: { title: string; items: Item[] }[] = [
     items: [
       { href: '/contacts', label: 'Contacts', icon: Users, permission: 'contact:read' },
       { href: '/accounts', label: 'Accounts', icon: Building2, permission: 'account:read' },
-      { href: '/deals', label: 'Deals', icon: Kanban, permission: 'deal:read', phase: 5 },
+      { href: '/deals', label: 'Deals', icon: Kanban, permission: 'deal:read' },
     ],
   },
   {
@@ -41,7 +41,7 @@ const SECTIONS: { title: string; items: Item[] }[] = [
     items: [
       { href: '/sequences', label: 'Sequences', icon: Send, permission: 'sequence:read' },
       { href: '/templates', label: 'Templates', icon: Mail, permission: 'template:read' },
-      { href: '/reports', label: 'Reports', icon: BarChart3, permission: 'report:read', phase: 5 },
+      { href: '/reports', label: 'Reports', icon: BarChart3, permission: 'report:read' },
     ],
   },
   {

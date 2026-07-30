@@ -13,3 +13,8 @@ coverage/
 next-env.d.ts
 *.tsbuildinfo
 prisma/*.db
+
+# Redis snapshot — created when redis-server runs with the repo as its cwd.
+# Committed here by accident once; it is local state, never source.
+dump.rdb
+*.rdb

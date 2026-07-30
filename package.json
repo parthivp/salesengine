@@ -24,7 +24,8 @@
     "db:seed-crm": "tsx scripts/seed-crm.ts",
     "db:seed-workflow": "tsx scripts/seed-workflow.ts",
     "db:seed-owner-tasks": "tsx scripts/seed-owner-tasks.ts",
-    "db:provision": "tsx scripts/provision-db.ts"
+    "db:provision": "tsx scripts/provision-db.ts",
+    "check": "tsx scripts/check.ts"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"

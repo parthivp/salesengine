@@ -7,7 +7,7 @@ import { can } from '@/lib/rbac'
 import { cn } from '@/lib/utils'
 import {
   LayoutDashboard, Users, Building2, Send, ListChecks, Kanban,
-  Inbox, BarChart3, Settings, Shield, Linkedin, Mail, Plug,
+  Inbox, BarChart3, Settings, Shield, Linkedin, Mail, Plug, Activity,
 } from 'lucide-react'
 
 type Item = {
@@ -56,6 +56,7 @@ const SECTIONS: { title: string; items: Item[] }[] = [
       { href: '/admin/integrations', label: 'Integrations', icon: Plug, permission: 'admin:access' },
       { href: '/admin/settings', label: 'Settings', icon: Settings, permission: 'admin:access' },
       { href: '/admin/audit', label: 'Audit log', icon: Shield, permission: 'audit:read' },
+      { href: '/admin/readiness', label: 'Readiness', icon: Activity, permission: 'admin:access' },
     ],
   },
 ]

@@ -2,6 +2,8 @@ import type { JobMap, JobName } from '../lib/queue'
 import { logger } from '../lib/logger'
 import { prismaAdmin } from '../lib/db'
 import { pollDueMailboxes, pollMailbox } from './jobs/replies'
+import { recordHeartbeat } from '../lib/health'
+import { QUEUE } from '../lib/queue'
 import { enrichContacts, enrichAccounts, recomputeScores } from './jobs/enrichment'
 import { processEnrollmentStep, enrollContacts, sequenceTick as tick } from './jobs/sequence'
 import { crmPull, crmPush, crmSyncAll, crmSyncDue, crmLogActivity } from './jobs/crm'
@@ -56,6 +58,19 @@ function notYetImplemented<N extends JobName>(phase: string): Handler<N> {
   }
 }
 
+/**
+ * Writes the liveness key the web app reads.
+ *
+ * Deliberately a queued job rather than a `setInterval` in the worker process: an
+ * interval proves the process is up, while this proves the process is still
+ * *draining its queues*. A worker that is running but wedged on a poisoned job is
+ * exactly as useless as one that has crashed, and only the second check notices.
+ */
+const heartbeat: Handler<'maintenance:heartbeat'> = async () => {
+  await recordHeartbeat(Object.values(QUEUE))
+  return { ok: true }
+}
+
 export const handlers: { [N in JobName]?: Handler<N> } = {
   'sequence:tick': tick,
   'sequence:step': processEnrollmentStep,
@@ -73,4 +88,5 @@ export const handlers: { [N in JobName]?: Handler<N> } = {
   'scoring:recompute': recomputeScores,
   'maintenance:reset-daily-caps': resetDailyCaps,
   'maintenance:expire-sessions': expireSessions,
+  'maintenance:heartbeat': heartbeat,
 }

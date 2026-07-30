@@ -69,6 +69,7 @@ export type JobMap = {
   'scoring:recompute': { tenantId: string; contactIds?: string[] }
   'maintenance:reset-daily-caps': Record<string, never>
   'maintenance:expire-sessions': Record<string, never>
+  'maintenance:heartbeat': Record<string, never>
 }
 
 export type JobName = keyof JobMap
@@ -90,6 +91,7 @@ const JOB_QUEUE: Record<JobName, QueueName> = {
   'scoring:recompute': QUEUE.scoring,
   'maintenance:reset-daily-caps': QUEUE.maintenance,
   'maintenance:expire-sessions': QUEUE.maintenance,
+  'maintenance:heartbeat': QUEUE.maintenance,
 }
 
 export async function enqueue<N extends JobName>(
@@ -109,6 +111,14 @@ export async function registerRepeatables() {
     'sequence:tick',
     {},
     { repeat: { every: 60_000 }, jobId: 'repeat:sequence:tick' }
+  )
+  // Every minute. The web app treats a gap of three minutes as "the worker is
+  // gone", so the beat has to be frequent enough that one slow tick is not
+  // mistaken for a death.
+  await queue(QUEUE.maintenance).add(
+    'maintenance:heartbeat',
+    {},
+    { repeat: { every: 60_000 }, jobId: 'repeat:heartbeat' }
   )
   await queue(QUEUE.maintenance).add(
     'maintenance:reset-daily-caps',

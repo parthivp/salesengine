@@ -237,6 +237,7 @@ automated.
 | `npm run typecheck` | `tsc --noEmit` |
 | `npm run lint` | ESLint (flat config) |
 | `npm run db:provision` | Role password, grants, and the row-level-security audit |
+| `npm run check` | Readiness report; exits non-zero on a blocker |
 | `node scripts/smoke.mjs` | Walk every route as each role; fails on any error or wrong authorization |
 
 ## Deploying
@@ -263,6 +264,22 @@ Running the app as the owner turns tenant isolation off completely, while every
 application-level check goes on looking correct and every test goes on passing.
 The compose file wires this correctly and `deployment.test.ts` fails if that ever
 changes.
+
+After deploying, check what is still missing:
+
+```bash
+npm run check          # or npm run check <tenant-slug>
+```
+
+It exits non-zero on a blocker, so it works as a deploy gate. The same report is
+at **Admin → Readiness**. Every item on it is a way the system can look healthy
+and do nothing — a dead worker, an unverified sending domain, a mailbox nobody
+polls. A dashboard full of zeroes reads as a quiet week whichever it is.
+
+The worker writes a heartbeat every minute; the app treats a three-minute gap as
+"gone". That check is a queued job rather than a timer inside the process, so it
+proves the worker is still *draining its queues* — a worker wedged on a poisoned
+job is as useless as one that has crashed, and only the queued version notices.
 
 To run the same checks against a database you provisioned by hand:
 

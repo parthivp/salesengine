@@ -84,6 +84,7 @@ const ownerRoutes = [
   ['admin-integrations', '/admin/integrations'],
   ['admin-settings', '/admin/settings'],
   ['admin-audit', '/admin/audit'],
+  ['admin-readiness', '/admin/readiness'],
   ['platform-tenants', '/platform/tenants'],
 ]
 
@@ -155,7 +156,7 @@ async function assertRefusals(email, expectations) {
 
 const ADMIN_ROUTES = [
   '/admin/users', '/admin/mailboxes', '/admin/integrations',
-  '/admin/settings', '/admin/audit', '/platform/tenants',
+  '/admin/settings', '/admin/audit', '/admin/readiness', '/platform/tenants',
 ]
 
 await assertRefusals('rohan@acme.test', ADMIN_ROUTES.map((p) => [p, 'refused']))
@@ -166,6 +167,7 @@ await assertRefusals('parthiv@acme.test', [
   ['/admin/integrations', 'allowed'],
   ['/admin/settings', 'allowed'],
   ['/admin/audit', 'allowed'],
+  ['/admin/readiness', 'allowed'],
   // This particular owner is the seeded platform admin — they operate the
   // deployment — so the cross-tenant surface is allowed for them.
   ['/platform/tenants', 'allowed'],

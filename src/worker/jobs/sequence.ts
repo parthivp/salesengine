@@ -11,6 +11,7 @@ import {
   rewriteLinksForTracking, textToHtml, type OutboundEmail,
 } from '../../lib/email/send'
 import { ingestInbound } from '../../lib/email/receive'
+import { checkEmailQuota, recordEmailSent } from '../../lib/limits'
 import type { EnrollmentStatus, SequenceStep } from '@prisma/client'
 
 /**
@@ -106,7 +107,7 @@ export async function processEnrollmentStep({
       })
 
       await advance(enrollmentId)
-      await incrementUsage(tid(), 'emails_sent')
+      await recordEmailSent()
       log.info({ to: prepared.email.to }, 'sequence email sent')
       return { sent: true }
     }
@@ -381,6 +382,18 @@ async function claimAndPrepare(
     return { kind: 'skip', reason: 'already_sent' }
   }
 
+  // The monthly quota, checked before anything is written to the outbox.
+  //
+  // This was the gap: `monthlyEmailLimit` existed on the tenant, was shown in the
+  // UI, and bounded nothing — a runaway sequence could send without limit while
+  // the operator believed a cap was in force. Deferred rather than stopped, so
+  // enrollments resume next month instead of needing to be rebuilt by hand.
+  const quota = await checkEmailQuota()
+  if (!quota.allowed) {
+    log.warn({ used: quota.used, limit: quota.limit }, 'monthly email limit reached; deferring')
+    return deferEnrollment(enrollmentId, startOfNextMonth(), 'monthly_email_limit')
+  }
+
   const sendingDomain = domainFromEmail(mailbox.email) ?? 'localhost'
   const rfcMessageId = newMessageId(sendingDomain)
 
@@ -612,14 +625,9 @@ async function deferEnrollment(
   return { kind: 'defer', until, reason }
 }
 
-async function incrementUsage(tenantId: string, metric: string) {
-  const period = new Date().toISOString().slice(0, 7)
-  const existing = await db().usageCounter.findFirst({ where: { period, metric } })
-  if (existing) {
-    await db().usageCounter.update({ where: { id: existing.id }, data: { value: { increment: 1 } } })
-  } else {
-    await db().usageCounter.create({ data: { tenantId, period, metric, value: 1 } })
-  }
+/** First moment of next month, UTC — when a monthly quota resets. */
+function startOfNextMonth(now = new Date()): Date {
+  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1))
 }
 
 // ---------------------------------------------------------------------------

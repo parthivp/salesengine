@@ -1,4 +1,5 @@
 import { pagePermission } from '@/lib/auth'
+import { InvitePanel, UserControls } from './client'
 import { withTenant, db } from '@/lib/db'
 import { PageHeader, Card, Badge, AccessDenied } from '@/components/ui'
 import { ROLE_LABELS, ROLE_DESCRIPTIONS } from '@/lib/rbac'
@@ -29,7 +30,7 @@ export default async function UsersPage() {
   }
   const auth = guard.auth
 
-  const { users, teams } = await withTenant(auth.tenant.id, async () => {
+  const { users, teams, tenant } = await withTenant(auth.tenant.id, async () => {
     const [users, teams] = await Promise.all([
       db().user.findMany({
         orderBy: [{ role: 'asc' }, { name: 'asc' }],
@@ -40,8 +41,16 @@ export default async function UsersPage() {
         include: { manager: { select: { name: true } }, _count: { select: { members: true } } },
       }),
     ])
-    return { users, teams }
+    const tenant = await db().tenant.findUniqueOrThrow({
+      where: { id: auth.tenant.id },
+      select: { seatLimit: true },
+    })
+    return { users, teams, tenant }
   })
+
+  // Counted the same way `checkSeatQuota` counts, so the panel cannot promise a
+  // seat the enforcer will then refuse.
+  const seatsUsed = users.filter((u) => u.status === 'active' || u.status === 'invited').length
 
   return (
     <>
@@ -50,7 +59,9 @@ export default async function UsersPage() {
         description="Who can access this workspace, and what they can see."
       />
 
-      <Card className="mb-6">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div className="lg:col-span-2 space-y-6">
+      <Card>
         <div className="px-5 py-4 border-b border-ink-200 flex items-center justify-between">
           <h2 className="text-sm font-semibold text-ink-900">
             Users <span className="text-ink-400 font-normal">({users.length})</span>
@@ -65,6 +76,7 @@ export default async function UsersPage() {
                 <th className="px-5 py-2.5 font-medium">Team</th>
                 <th className="px-5 py-2.5 font-medium">Status</th>
                 <th className="px-5 py-2.5 font-medium">Last seen</th>
+                <th className="px-5 py-2.5 font-medium text-right">Manage</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-ink-100">
@@ -91,6 +103,16 @@ export default async function UsersPage() {
                     <Badge tone={STATUS_TONE[u.status]}>{u.status}</Badge>
                   </td>
                   <td className="px-5 py-3 text-ink-500">{formatRelative(u.lastLoginAt)}</td>
+                  <td className="px-5 py-3">
+                    <UserControls
+                      userId={u.id}
+                      name={u.name}
+                      role={u.role}
+                      status={u.status}
+                      isSelf={u.id === auth.user.id}
+                      canManageOwners={auth.user.role === 'owner'}
+                    />
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -125,6 +147,16 @@ export default async function UsersPage() {
           </ul>
         )}
       </Card>
+        </div>
+
+        <div className="space-y-6">
+          <InvitePanel
+            seatsUsed={seatsUsed}
+            seatLimit={tenant.seatLimit}
+            canInviteOwner={auth.user.role === 'owner'}
+          />
+        </div>
+      </div>
     </>
   )
 }

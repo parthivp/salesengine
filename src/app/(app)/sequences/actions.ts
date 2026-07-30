@@ -28,12 +28,30 @@ export async function createSequence(input: z.input<typeof createSchema>): Promi
       const clash = await db().sequence.findFirst({ where: { name: parsed.data.name } })
       if (clash) throw new Error('A sequence with that name already exists.')
 
+      // The workspace defaults from Settings. Applied at creation only: changing a
+      // default later must not retime sequences already in flight, so the value is
+      // copied onto the row rather than read through at send time.
+      const tenant = await db().tenant.findUniqueOrThrow({
+        where: { id: tid() },
+        select: { settings: true },
+      })
+      const defaults = (tenant.settings ?? {}) as {
+        defaultSendWindowStart?: number
+        defaultSendWindowEnd?: number
+      }
+
       const seq = await db().sequence.create({
         data: {
           tenantId: tid(),
           name: parsed.data.name,
           description: parsed.data.description,
           createdById: auth.user.id,
+          ...(typeof defaults.defaultSendWindowStart === 'number'
+            ? { sendWindowStart: defaults.defaultSendWindowStart }
+            : {}),
+          ...(typeof defaults.defaultSendWindowEnd === 'number'
+            ? { sendWindowEnd: defaults.defaultSendWindowEnd }
+            : {}),
           // A new sequence starts with one email step so the builder is never empty.
           steps: {
             create: {

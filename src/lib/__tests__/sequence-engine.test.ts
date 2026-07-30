@@ -269,6 +269,60 @@ describe('never double-sends', () => {
   })
 })
 
+describe('the monthly email quota', () => {
+  it('refuses to send once the workspace is over its limit', async () => {
+    // The limit existed on the tenant and was displayed in the UI while bounding
+    // nothing, so a runaway sequence could send without limit and the operator
+    // would believe a cap was in force.
+    const original = await owner.tenant.findUniqueOrThrow({ where: { id: tenantId } })
+    await owner.tenant.update({ where: { id: tenantId }, data: { monthlyEmailLimit: 1 } })
+    await owner.usageCounter.deleteMany({ where: { tenantId } })
+    await owner.usageCounter.create({
+      data: {
+        tenantId,
+        period: new Date().toISOString().slice(0, 7),
+        metric: 'emails_sent',
+        value: 1,
+      },
+    })
+
+    try {
+      const id = await enrol()
+      const result = await processEnrollmentStep({ enrollmentId: id, tenantId })
+      expect(result).toMatchObject({ kind: 'defer', reason: 'monthly_email_limit' })
+
+      expect(
+        await owner.emailMessage.count({ where: { tenantId, direction: 'outbound' } })
+      ).toBe(0)
+
+      // Deferred to next month rather than stopped, so the enrollment resumes on
+      // its own instead of needing to be rebuilt by hand.
+      const e = await owner.sequenceEnrollment.findUniqueOrThrow({ where: { id } })
+      expect(e.status).toBe('active')
+      expect(e.nextRunAt!.getTime()).toBeGreaterThan(Date.now())
+      expect(e.lockedAt).toBeNull()
+    } finally {
+      await owner.tenant.update({
+        where: { id: tenantId },
+        data: { monthlyEmailLimit: original.monthlyEmailLimit },
+      })
+      await owner.usageCounter.deleteMany({ where: { tenantId } })
+    }
+  })
+
+  it('counts a successful send against the quota', async () => {
+    await owner.usageCounter.deleteMany({ where: { tenantId } })
+    const id = await enrol()
+    await processEnrollmentStep({ enrollmentId: id, tenantId })
+
+    const counter = await owner.usageCounter.findFirstOrThrow({
+      where: { tenantId, metric: 'emails_sent' },
+    })
+    expect(counter.value).toBe(1)
+    await owner.usageCounter.deleteMany({ where: { tenantId } })
+  })
+})
+
 describe('never sends after a stop signal', () => {
   it('stops when the contact replies', async () => {
     const id = await enrol()

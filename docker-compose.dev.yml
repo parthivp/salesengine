@@ -1,0 +1,36 @@
+# Dev: just the backing services. Run the app and worker on the host with
+#   npm run dev        (terminal 1)
+#   npm run worker:dev (terminal 2)
+name: salesengine-dev
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: salesengine
+      POSTGRES_PASSWORD: salesengine
+      POSTGRES_DB: salesengine
+    ports: ['5432:5432']
+    volumes: ['pgdata_dev:/var/lib/postgresql/data']
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U salesengine -d salesengine']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    ports: ['6379:6379']
+    volumes: ['redisdata_dev:/data']
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  pgdata_dev:
+  redisdata_dev:

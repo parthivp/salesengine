@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: salesengine
+          POSTGRES_PASSWORD: salesengine
+          POSTGRES_DB: salesengine
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U salesengine"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+
+    env:
+      DATABASE_URL: postgresql://salesengine_app:salesengine_app@localhost:5432/salesengine?schema=public
+      DIRECT_DATABASE_URL: postgresql://salesengine:salesengine@localhost:5432/salesengine?schema=public
+      REDIS_URL: redis://localhost:6379
+      AUTH_SECRET: ci-only-secret-at-least-32-characters-long
+      ENCRYPTION_KEY: ci-only-encryption-key-32-bytes!
+      APP_URL: http://localhost:3000
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+      - run: npx prisma generate
+
+      # Migrations run as the owner and create the restricted runtime role.
+      - name: Apply migrations
+        run: npx prisma migrate deploy
+
+      - name: Seed
+        run: npm run db:seed
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test (includes tenant isolation)
+        run: npm test
+
+      - name: Build
+        run: npm run build

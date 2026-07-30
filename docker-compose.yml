@@ -1,0 +1,91 @@
+name: salesengine
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: salesengine
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-salesengine}
+      POSTGRES_DB: salesengine
+    ports:
+      - '${POSTGRES_PORT:-5432}:5432'
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U salesengine -d salesengine']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --appendonly yes --maxmemory-policy noeviction
+    ports:
+      - '${REDIS_PORT:-6379}:6379'
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # Applies pending migrations, then exits. Both app and worker wait on it.
+  migrate:
+    build:
+      context: .
+      target: runner
+    command: ['npx', 'prisma', 'migrate', 'deploy']
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://salesengine:${POSTGRES_PASSWORD:-salesengine}@postgres:5432/salesengine?schema=public
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: 'no'
+
+  app:
+    build:
+      context: .
+      target: runner
+    command: ['node', 'server.js']
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://salesengine:${POSTGRES_PASSWORD:-salesengine}@postgres:5432/salesengine?schema=public
+      REDIS_URL: redis://redis:6379
+      PORT: '3000'
+    ports:
+      - '${APP_PORT:-3000}:3000'
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+
+  # The sequence scheduler, email sender, CRM sync and enrichment all live here.
+  # Deliberately a separate process: these are long-running jobs that must not
+  # share a request lifecycle.
+  worker:
+    build:
+      context: .
+      target: runner
+    command: ['node', '--import', 'tsx', 'src/worker/index.ts']
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://salesengine:${POSTGRES_PASSWORD:-salesengine}@postgres:5432/salesengine?schema=public
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+
+volumes:
+  pgdata:
+  redisdata:

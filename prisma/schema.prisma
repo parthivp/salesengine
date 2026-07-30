@@ -1,0 +1,1050 @@
+// SalesEngine — Prisma schema
+// Multi-tenant: every tenant-scoped table carries tenantId and is protected by
+// Postgres Row-Level Security (see prisma/migrations/*_rls). The Prisma client
+// extension in src/lib/db.ts injects tenantId automatically; RLS is the backstop.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  // Runtime: restricted role, subject to row-level security.
+  url       = env("DATABASE_URL")
+  // Migrations & seed: owner role with BYPASSRLS.
+  directUrl = env("DIRECT_DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Tenancy, identity, access
+// ---------------------------------------------------------------------------
+
+enum TenantStatus {
+  active
+  suspended
+  deleted
+}
+
+enum PlanTier {
+  internal
+  starter
+  growth
+  scale
+}
+
+model Tenant {
+  id     String       @id @default(cuid())
+  slug   String       @unique
+  name   String
+  status TenantStatus @default(active)
+  plan   PlanTier     @default(internal)
+
+  // Limits — enforced by the scheduler and enrichment jobs, not at call sites.
+  seatLimit         Int @default(10)
+  monthlyEmailLimit Int @default(50000)
+  enrichCreditLimit Int @default(5000)
+
+  settings Json @default("{}")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  users           User[]
+  teams           Team[]
+  accounts        Account[]
+  contacts        Contact[]
+  leads           Lead[]
+  sequences       Sequence[]
+  enrollments     SequenceEnrollment[]
+  mailboxes       Mailbox[]
+  emailMessages   EmailMessage[]
+  templates       EmailTemplate[]
+  tasks           Task[]
+  deals           Deal[]
+  pipelineStages  PipelineStage[]
+  crmConnections  CrmConnection[]
+  suppressions    SuppressionEntry[]
+  auditLogs       AuditLog[]
+  customFieldDefs CustomFieldDef[]
+  listRecords     ContactList[]
+  captureForms    CaptureForm[]
+  invites         Invite[]
+  apiKeys         ApiKey[]
+  usageCounters   UsageCounter[]
+
+  @@index([status])
+  @@map("tenants")
+}
+
+enum UserRole {
+  owner // full control incl. billing, one per tenant
+  admin // full control of tenant config
+  manager // sees their team's records
+  rep // sees own records
+}
+
+enum UserStatus {
+  invited
+  active
+  disabled
+}
+
+model User {
+  id       String     @id @default(cuid())
+  tenantId String
+  tenant   Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  email    String
+  name     String
+  role     UserRole   @default(rep)
+  status   UserStatus @default(invited)
+
+  passwordHash String?
+  teamId       String?
+  team         Team?   @relation(fields: [teamId], references: [id], onDelete: SetNull)
+
+  timezone  String  @default("Asia/Kolkata")
+  avatarUrl String?
+
+  lastLoginAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  managedTeams  Team[]     @relation("TeamManager")
+  ownedAccounts Account[]  @relation("AccountOwner")
+  ownedContacts Contact[]  @relation("ContactOwner")
+  ownedLeads    Lead[]     @relation("LeadOwner")
+  assignedTasks Task[]     @relation("TaskAssignee")
+  ownedDeals    Deal[]     @relation("DealOwner")
+  mailboxes     Mailbox[]
+  sessions      Session[]
+  auditLogs     AuditLog[]
+
+  // Platform staff flag — grants access to the super-admin portal.
+  isPlatformAdmin Boolean @default(false)
+
+  @@unique([tenantId, email])
+  @@index([tenantId, role])
+  @@index([tenantId, teamId])
+  @@map("users")
+}
+
+model Team {
+  id        String  @id @default(cuid())
+  tenantId  String
+  tenant    Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name      String
+  managerId String?
+  manager   User?   @relation("TeamManager", fields: [managerId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  members User[]
+
+  @@unique([tenantId, name])
+  @@map("teams")
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String   @unique
+  expiresAt DateTime
+  ip        String?
+  userAgent String?
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("sessions")
+}
+
+model Invite {
+  id          String    @id @default(cuid())
+  tenantId    String
+  tenant      Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  email       String
+  role        UserRole  @default(rep)
+  teamId      String?
+  tokenHash   String    @unique
+  expiresAt   DateTime
+  acceptedAt  DateTime?
+  invitedById String
+  createdAt   DateTime  @default(now())
+
+  @@index([tenantId, email])
+  @@map("invites")
+}
+
+model ApiKey {
+  id         String    @id @default(cuid())
+  tenantId   String
+  tenant     Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name       String
+  prefix     String    @unique
+  keyHash    String
+  scopes     String[]  @default([])
+  lastUsedAt DateTime?
+  revokedAt  DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([tenantId])
+  @@map("api_keys")
+}
+
+// ---------------------------------------------------------------------------
+// Lead / CRM core objects
+// ---------------------------------------------------------------------------
+
+model Account {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  name          String
+  domain        String?
+  industry      String?
+  employeeCount Int?
+  annualRevenue BigInt?
+  country       String?
+  city          String?
+  linkedinUrl   String?
+  websiteUrl    String?
+  description   String?
+
+  apolloId   String?
+  enrichedAt DateTime?
+
+  ownerId String?
+  owner   User?   @relation("AccountOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+
+  customFields Json @default("{}")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  contacts   Contact[]
+  deals      Deal[]
+  tasks      Task[]
+  activities Activity[]
+
+  @@unique([tenantId, domain])
+  @@index([tenantId, name])
+  @@index([tenantId, ownerId])
+  @@map("accounts")
+}
+
+enum ContactStatus {
+  new
+  working
+  engaged
+  qualified
+  unqualified
+  customer
+  do_not_contact
+}
+
+model Contact {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  email       String?
+  emailStatus EmailVerificationStatus @default(unverified)
+  firstName   String?
+  lastName    String?
+  title       String?
+  phone       String?
+  linkedinUrl String?
+  timezone    String?
+  country     String?
+  city        String?
+
+  accountId String?
+  account   Account? @relation(fields: [accountId], references: [id], onDelete: SetNull)
+
+  status ContactStatus @default(new)
+  score  Int           @default(0)
+
+  apolloId   String?
+  enrichedAt DateTime?
+  source     String? // csv | apollo | form | crm | manual | api
+
+  ownerId String?
+  owner   User?   @relation("ContactOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+
+  customFields Json @default("{}")
+
+  unsubscribedAt  DateTime?
+  bouncedAt       DateTime?
+  lastContactedAt DateTime?
+  lastRepliedAt   DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  enrollments   SequenceEnrollment[]
+  emailMessages EmailMessage[]
+  tasks         Task[]
+  deals         Deal[]
+  activities    Activity[]
+  listMembers   ContactListMember[]
+  scoreEvents   ScoreEvent[]
+
+  @@unique([tenantId, email])
+  @@index([tenantId, accountId])
+  @@index([tenantId, ownerId])
+  @@index([tenantId, status])
+  @@index([tenantId, score])
+  @@map("contacts")
+}
+
+enum EmailVerificationStatus {
+  unverified
+  valid
+  risky
+  invalid
+  catch_all
+}
+
+enum LeadStatus {
+  new
+  contacted
+  qualified
+  converted
+  disqualified
+}
+
+model Lead {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  email     String?
+  firstName String?
+  lastName  String?
+  company   String?
+  title     String?
+  phone     String?
+  message   String?
+
+  source     String // form | csv | api | apollo | manual
+  sourceMeta Json       @default("{}")
+  status     LeadStatus @default(new)
+
+  ownerId String?
+  owner   User?   @relation("LeadOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+
+  convertedContactId String?
+  convertedAt        DateTime?
+
+  customFields Json @default("{}")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tenantId, status])
+  @@index([tenantId, email])
+  @@index([tenantId, ownerId])
+  @@map("leads")
+}
+
+model CaptureForm {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  name        String
+  publicKey   String  @unique
+  fieldMap    Json    @default("{}")
+  assignRule  Json    @default("{}") // round_robin | owner_of_account | fixed
+  redirectUrl String?
+  active      Boolean @default(true)
+  submissions Int     @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tenantId])
+  @@map("capture_forms")
+}
+
+model ContactList {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  name        String
+  description String?
+  isDynamic   Boolean @default(false)
+  filter      Json    @default("{}") // segment definition when isDynamic
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  members ContactListMember[]
+
+  @@unique([tenantId, name])
+  @@map("contact_lists")
+}
+
+model ContactListMember {
+  id        String      @id @default(cuid())
+  listId    String
+  list      ContactList @relation(fields: [listId], references: [id], onDelete: Cascade)
+  contactId String
+  contact   Contact     @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  addedAt   DateTime    @default(now())
+
+  @@unique([listId, contactId])
+  @@index([contactId])
+  @@map("contact_list_members")
+}
+
+model ScoreEvent {
+  id        String   @id @default(cuid())
+  contactId String
+  contact   Contact  @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  rule      String
+  delta     Int
+  reason    String?
+  createdAt DateTime @default(now())
+
+  @@index([contactId, createdAt])
+  @@map("score_events")
+}
+
+model CustomFieldDef {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  object   String // account | contact | lead | deal
+  key      String
+  label    String
+  type     String // text | number | date | boolean | select | multiselect | url
+  options  String[] @default([])
+  required Boolean  @default(false)
+
+  createdAt DateTime @default(now())
+
+  @@unique([tenantId, object, key])
+  @@map("custom_field_defs")
+}
+
+// ---------------------------------------------------------------------------
+// Outreach: templates, sequences, enrollments
+// ---------------------------------------------------------------------------
+
+model EmailTemplate {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  name     String
+  subject  String
+  bodyHtml String
+  bodyText String
+  category String?
+
+  spamScore   Int? // populated by the linter
+  createdById String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  steps SequenceStep[]
+
+  @@unique([tenantId, name])
+  @@map("email_templates")
+}
+
+enum SequenceStatus {
+  draft
+  pending_approval
+  active
+  paused
+  archived
+}
+
+model Sequence {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  name        String
+  description String?
+  status      SequenceStatus @default(draft)
+
+  // Sending window, in the *prospect's* timezone when known, else the tenant's.
+  sendWindowStart Int     @default(9) // hour, 0-23
+  sendWindowEnd   Int     @default(17)
+  sendDays        Int[]   @default([1, 2, 3, 4, 5]) // 0=Sun
+  respectHolidays Boolean @default(true)
+
+  dailyEnrollCap     Int     @default(200)
+  stopOnReply        Boolean @default(true)
+  stopOnAccountReply Boolean @default(true) // someone else at the same company replied
+
+  trackOpens  Boolean @default(false)
+  trackClicks Boolean @default(false)
+
+  createdById  String?
+  approvedById String?
+  approvedAt   DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  steps       SequenceStep[]
+  enrollments SequenceEnrollment[]
+
+  @@unique([tenantId, name])
+  @@index([tenantId, status])
+  @@map("sequences")
+}
+
+enum StepType {
+  email
+  wait
+  task
+  linkedin_connect
+  linkedin_message
+  linkedin_view
+  call
+  condition
+}
+
+model SequenceStep {
+  id         String   @id @default(cuid())
+  sequenceId String
+  sequence   Sequence @relation(fields: [sequenceId], references: [id], onDelete: Cascade)
+
+  order Int
+  type  StepType
+
+  delayMinutes Int @default(0) // wait *before* executing this step
+
+  templateId String?
+  template   EmailTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
+
+  subject  String?
+  bodyHtml String?
+  bodyText String?
+  taskNote String?
+
+  // Branching: evaluated before execution. Shape documented in src/lib/sequences/conditions.ts
+  conditions Json @default("{}")
+
+  // A/B: variants share a variantGroup; exactly one is chosen per enrollment.
+  variantGroup  String?
+  variantWeight Int     @default(100)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  enrollments SequenceEnrollment[]
+
+  @@unique([sequenceId, order, variantGroup])
+  @@index([sequenceId])
+  @@map("sequence_steps")
+}
+
+enum EnrollmentStatus {
+  active
+  paused
+  completed
+  stopped_replied
+  stopped_bounced
+  stopped_unsubscribed
+  stopped_manual
+  failed
+}
+
+model SequenceEnrollment {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  sequenceId String
+  sequence   Sequence @relation(fields: [sequenceId], references: [id], onDelete: Cascade)
+  contactId  String
+  contact    Contact  @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  currentStepId String?
+  currentStep   SequenceStep? @relation(fields: [currentStepId], references: [id], onDelete: SetNull)
+  stepIndex     Int           @default(0)
+
+  status    EnrollmentStatus @default(active)
+  nextRunAt DateTime?
+
+  // Concurrency guard for the scheduler — see src/worker/jobs/processEnrollmentStep.ts
+  lockedAt  DateTime?
+  lockedBy  String?
+  attempts  Int       @default(0)
+  lastError String?
+
+  mailboxId    String?
+  enrolledById String?
+
+  startedAt   DateTime  @default(now())
+  completedAt DateTime?
+  stoppedAt   DateTime?
+  stopReason  String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  emailMessages EmailMessage[]
+
+  @@unique([sequenceId, contactId])
+  @@index([tenantId, status, nextRunAt])
+  @@index([contactId])
+  @@map("sequence_enrollments")
+}
+
+// ---------------------------------------------------------------------------
+// Email infrastructure
+// ---------------------------------------------------------------------------
+
+enum MailboxProvider {
+  ses
+  gmail
+  outlook
+  smtp
+}
+
+enum MailboxHealth {
+  healthy
+  warming
+  throttled
+  blocked
+  disconnected
+}
+
+model Mailbox {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  provider MailboxProvider
+  email    String
+  fromName String
+
+  userId String?
+  user   User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  // OAuth / SMTP credentials, encrypted at rest (AES-256-GCM via src/lib/crypto.ts)
+  credentials Json @default("{}")
+
+  health       MailboxHealth @default(warming)
+  dailyCap     Int           @default(50)
+  warmupDay    Int           @default(0)
+  warmupTarget Int           @default(200)
+  sentToday    Int           @default(0)
+  sentTodayOn  DateTime?
+
+  // Deliverability posture
+  spfOk         Boolean   @default(false)
+  dkimOk        Boolean   @default(false)
+  dmarcOk       Boolean   @default(false)
+  lastCheckedAt DateTime?
+
+  bounceRate    Float @default(0)
+  complaintRate Float @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  emailMessages EmailMessage[]
+
+  @@unique([tenantId, email])
+  @@index([tenantId, health])
+  @@map("mailboxes")
+}
+
+enum EmailDirection {
+  outbound
+  inbound
+}
+
+enum EmailStatus {
+  queued
+  sending
+  sent
+  delivered
+  opened
+  clicked
+  replied
+  bounced
+  complained
+  failed
+  skipped
+}
+
+model EmailMessage {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  direction EmailDirection
+  status    EmailStatus    @default(queued)
+
+  contactId    String?
+  contact      Contact?            @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  mailboxId    String?
+  mailbox      Mailbox?            @relation(fields: [mailboxId], references: [id], onDelete: SetNull)
+  enrollmentId String?
+  enrollment   SequenceEnrollment? @relation(fields: [enrollmentId], references: [id], onDelete: SetNull)
+
+  fromEmail String
+  toEmail   String
+  subject   String
+  bodyHtml  String?
+  bodyText  String?
+
+  // RFC message id + thread key, used for reply matching
+  messageId  String? @unique
+  inReplyTo  String?
+  threadKey  String?
+  providerId String? // SES message id
+
+  // Idempotency — set before the provider call, so a crash cannot double-send.
+  idempotencyKey String? @unique
+
+  opensCount  Int @default(0)
+  clicksCount Int @default(0)
+
+  scheduledAt DateTime?
+  sentAt      DateTime?
+  deliveredAt DateTime?
+  openedAt    DateTime?
+  clickedAt   DateTime?
+  repliedAt   DateTime?
+  bouncedAt   DateTime?
+  failedAt    DateTime?
+  error       String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  events EmailEvent[]
+
+  @@index([tenantId, status])
+  @@index([tenantId, contactId])
+  @@index([threadKey])
+  @@index([enrollmentId])
+  @@map("email_messages")
+}
+
+model EmailEvent {
+  id         String       @id @default(cuid())
+  messageId  String
+  message    EmailMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  type       String // delivery | open | click | bounce | complaint | reject
+  payload    Json         @default("{}")
+  occurredAt DateTime     @default(now())
+
+  @@index([messageId, type])
+  @@map("email_events")
+}
+
+enum SuppressionType {
+  email
+  domain
+}
+
+model SuppressionEntry {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  type   SuppressionType
+  value  String
+  reason String // unsubscribe | bounce | complaint | manual | global
+
+  createdAt DateTime @default(now())
+
+  @@unique([tenantId, type, value])
+  @@index([tenantId])
+  @@map("suppression_entries")
+}
+
+// ---------------------------------------------------------------------------
+// Work management: tasks, deals, activity
+// ---------------------------------------------------------------------------
+
+enum TaskType {
+  call
+  email
+  linkedin
+  follow_up
+  meeting
+  other
+}
+
+enum TaskStatus {
+  open
+  completed
+  skipped
+  snoozed
+}
+
+model Task {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  type   TaskType
+  status TaskStatus @default(open)
+
+  title String
+  note  String?
+
+  contactId String?
+  contact   Contact? @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  accountId String?
+  account   Account? @relation(fields: [accountId], references: [id], onDelete: SetNull)
+  dealId    String?
+
+  assigneeId String?
+  assignee   User?   @relation("TaskAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
+
+  // LinkedIn queue payload — the drafted message the rep will send themselves.
+  payload Json @default("{}")
+
+  dueAt       DateTime?
+  snoozedTo   DateTime?
+  completedAt DateTime?
+  outcome     String?
+
+  priority Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tenantId, assigneeId, status, dueAt])
+  @@index([tenantId, type, status])
+  @@map("tasks")
+}
+
+model PipelineStage {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  name        String
+  order       Int
+  probability Int     @default(0)
+  isWon       Boolean @default(false)
+  isLost      Boolean @default(false)
+
+  deals Deal[]
+
+  @@unique([tenantId, name])
+  @@map("pipeline_stages")
+}
+
+model Deal {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  name     String
+  value    Decimal @default(0) @db.Decimal(14, 2)
+  currency String  @default("USD")
+
+  stageId String
+  stage   PipelineStage @relation(fields: [stageId], references: [id])
+
+  accountId String?
+  account   Account? @relation(fields: [accountId], references: [id], onDelete: SetNull)
+  contactId String?
+  contact   Contact? @relation(fields: [contactId], references: [id], onDelete: SetNull)
+
+  ownerId String?
+  owner   User?   @relation("DealOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+
+  expectedCloseDate DateTime?
+  closedAt          DateTime?
+  lastActivityAt    DateTime?
+
+  customFields Json @default("{}")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tenantId, stageId])
+  @@index([tenantId, ownerId])
+  @@map("deals")
+}
+
+model Activity {
+  id       String @id @default(cuid())
+  tenantId String
+
+  type    String // email_sent | email_opened | reply | call | note | stage_change | sync | field_change
+  summary String
+  detail  Json   @default("{}")
+
+  contactId String?
+  contact   Contact? @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  accountId String?
+  account   Account? @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  actorId    String?
+  occurredAt DateTime @default(now())
+
+  @@index([tenantId, contactId, occurredAt])
+  @@index([tenantId, accountId, occurredAt])
+  @@map("activities")
+}
+
+// ---------------------------------------------------------------------------
+// CRM connector layer
+// ---------------------------------------------------------------------------
+
+enum CrmProvider {
+  salesforce
+  hubspot
+  pipedrive
+  zoho
+}
+
+enum CrmConnectionStatus {
+  connected
+  expired
+  error
+  disconnected
+}
+
+model CrmConnection {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  provider CrmProvider
+  status   CrmConnectionStatus @default(connected)
+
+  instanceUrl String?
+  externalId  String? // SF org id, HubSpot portal id
+  credentials Json    @default("{}") // encrypted at rest
+
+  syncEnabled Boolean   @default(true)
+  lastSyncAt  DateTime?
+  lastError   String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  fieldMappings CrmFieldMapping[]
+  syncRecords   CrmSyncRecord[]
+
+  @@unique([tenantId, provider])
+  @@map("crm_connections")
+}
+
+enum SyncDirection {
+  push
+  pull
+  bidirectional
+  none
+}
+
+model CrmFieldMapping {
+  id           String        @id @default(cuid())
+  connectionId String
+  connection   CrmConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+
+  object          String // account | contact | lead | deal | activity
+  localField      String
+  remoteField     String
+  direction       SyncDirection @default(bidirectional)
+  transform       String? // identity | uppercase | date_iso | picklist_map
+  transformConfig Json          @default("{}")
+
+  @@unique([connectionId, object, localField, remoteField])
+  @@index([connectionId, object])
+  @@map("crm_field_mappings")
+}
+
+model CrmSyncRecord {
+  id           String        @id @default(cuid())
+  connectionId String
+  connection   CrmConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+
+  object   String
+  localId  String
+  remoteId String
+
+  // Hash of the last synced payload — lets us skip no-op writes and detect
+  // genuine conflicts rather than echoing our own change back.
+  localHash  String?
+  remoteHash String?
+
+  lastPulledAt DateTime?
+  lastPushedAt DateTime?
+  conflictAt   DateTime?
+  lastError    String?
+
+  @@unique([connectionId, object, localId])
+  @@unique([connectionId, object, remoteId])
+  @@index([connectionId, object])
+  @@map("crm_sync_records")
+}
+
+// ---------------------------------------------------------------------------
+// Observability & metering
+// ---------------------------------------------------------------------------
+
+model AuditLog {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  actorId String?
+  actor   User?   @relation(fields: [actorId], references: [id], onDelete: SetNull)
+
+  action   AuditAction @default(other)
+  entity   String
+  entityId String?
+  before   Json?
+  after    Json?
+  ip       String?
+
+  createdAt DateTime @default(now())
+
+  @@index([tenantId, createdAt])
+  @@index([tenantId, entity, entityId])
+  @@map("audit_logs")
+}
+
+enum AuditAction {
+  create
+  update
+  delete
+  login
+  logout
+  invite
+  impersonate
+  connect
+  disconnect
+  export
+  other
+}
+
+model UsageCounter {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  period String // YYYY-MM
+  metric String // emails_sent | enrich_credits | api_calls
+  value  Int    @default(0)
+
+  updatedAt DateTime @updatedAt
+
+  @@unique([tenantId, period, metric])
+  @@map("usage_counters")
+}

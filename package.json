@@ -1,0 +1,63 @@
+{
+  "name": "salesengine",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev -p 3000",
+    "build": "prisma generate && next build",
+    "start": "next start -p 3000",
+    "worker": "tsx src/worker/index.ts",
+    "worker:dev": "tsx watch src/worker/index.ts",
+    "db:generate": "prisma generate",
+    "db:migrate": "prisma migrate dev",
+    "db:deploy": "prisma migrate deploy",
+    "db:seed": "tsx prisma/seed.ts",
+    "db:studio": "prisma studio",
+    "lint": "next lint",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "prisma": {
+    "seed": "tsx prisma/seed.ts"
+  },
+  "dependencies": {
+    "@aws-sdk/client-sesv2": "3.723.0",
+    "@prisma/client": "6.16.2",
+    "bcryptjs": "3.0.2",
+    "bullmq": "5.58.5",
+    "clsx": "2.1.1",
+    "date-fns": "4.1.0",
+    "date-fns-tz": "3.2.0",
+    "dotenv": "^17.4.2",
+    "ioredis": "5.7.0",
+    "jose": "6.1.0",
+    "lucide-react": "0.544.0",
+    "nanoid": "5.1.5",
+    "next": "^16.2.12",
+    "papaparse": "5.5.3",
+    "pino": "9.5.0",
+    "react": "19.1.0",
+    "react-dom": "19.1.0",
+    "server-only": "^0.0.1",
+    "tailwind-merge": "3.3.1",
+    "zod": "3.25.76"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "4.1.13",
+    "@types/bcryptjs": "2.4.6",
+    "@types/node": "22.18.1",
+    "@types/papaparse": "5.3.15",
+    "@types/react": "19.1.13",
+    "@types/react-dom": "19.1.9",
+    "eslint": "9.35.0",
+    "eslint-config-next": "^16.2.12",
+    "playwright": "^1.62.0",
+    "postcss": "8.5.6",
+    "prisma": "6.16.2",
+    "tailwindcss": "4.1.13",
+    "tsx": "4.20.5",
+    "typescript": "5.9.2",
+    "vitest": "3.2.4"
+  }
+}

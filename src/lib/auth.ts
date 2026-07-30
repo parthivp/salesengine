@@ -145,6 +145,41 @@ export async function requirePlatformAdmin(): Promise<AuthContext> {
 }
 
 /**
+ * The page-level counterparts. They report the refusal instead of throwing, so the
+ * page can render it.
+ *
+ * Why not just call `requirePermission` in a page: a thrown ForbiddenError inside a
+ * server component is an unhandled render error, which Next turns into a 500 with a
+ * stack trace in the log. That is what /admin/integrations actually did for a rep —
+ * the guard worked and the response was still wrong. A 500 also asserts something
+ * untrue: the server is fine, the request was refused.
+ *
+ * The shape is a discriminated union rather than `AuthContext | null` so that the
+ * refused branch carries no `auth` at all. Reaching for `guard.auth` without first
+ * checking `guard.ok` is then a type error, which is the only reliable way to keep a
+ * later edit from quietly querying as an unauthorised user.
+ */
+export type PageGuard =
+  | { ok: true; auth: AuthContext }
+  | { ok: false; role: UserRole }
+
+export async function pagePermission(permission: string): Promise<PageGuard> {
+  const auth = await getAuth()
+  if (!auth) throw new UnauthorizedError()
+  return can(auth.user.role, permission)
+    ? { ok: true, auth }
+    : { ok: false, role: auth.user.role }
+}
+
+export async function pagePlatformAdmin(): Promise<PageGuard> {
+  const auth = await getAuth()
+  if (!auth) throw new UnauthorizedError()
+  return auth.user.isPlatformAdmin
+    ? { ok: true, auth }
+    : { ok: false, role: auth.user.role }
+}
+
+/**
  * The standard handler wrapper: authenticate, then run inside the caller's
  * tenant context so RLS is active for everything the handler touches.
  */

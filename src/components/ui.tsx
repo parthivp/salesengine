@@ -133,3 +133,41 @@ export function PhaseNotice({ phase, feature }: { phase: number; feature: string
     </Card>
   )
 }
+
+/**
+ * What a page renders when the signed-in role may not see it.
+ *
+ * Deliberately says which role the viewer has and who to ask, rather than a bare
+ * "Forbidden". The commonest cause of someone hitting this is a stale link or a
+ * role that was changed under them, and neither is helped by a dead end.
+ */
+export function AccessDenied({
+  what,
+  role,
+  contact = 'a workspace owner or admin',
+}: {
+  what: string
+  role: string
+  contact?: string
+}) {
+  return (
+    <Card className="p-6">
+      <div className="flex items-start gap-3">
+        <div className="h-9 w-9 shrink-0 rounded-lg bg-amber-50 border border-amber-200 grid place-items-center">
+          <svg viewBox="0 0 24 24" className="h-4.5 w-4.5 text-amber-700" fill="none"
+               stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <rect x="3" y="11" width="18" height="11" rx="2" />
+            <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+          </svg>
+        </div>
+        <div>
+          <p className="text-sm font-medium text-ink-900">{what} is not available to your role</p>
+          <p className="mt-1 text-sm text-ink-500">
+            You are signed in as <span className="font-medium text-ink-700">{role}</span>. Ask{' '}
+            {contact} if you need access.
+          </p>
+        </div>
+      </div>
+    </Card>
+  )
+}

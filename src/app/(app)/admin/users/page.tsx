@@ -1,6 +1,6 @@
-import { requirePermission } from '@/lib/auth'
+import { pagePermission } from '@/lib/auth'
 import { withTenant, db } from '@/lib/db'
-import { PageHeader, Card, Badge } from '@/components/ui'
+import { PageHeader, Card, Badge, AccessDenied } from '@/components/ui'
 import { ROLE_LABELS, ROLE_DESCRIPTIONS } from '@/lib/rbac'
 import { formatRelative, initials } from '@/lib/utils'
 import type { UserStatus } from '@prisma/client'
@@ -15,7 +15,19 @@ const STATUS_TONE: Record<UserStatus, 'success' | 'warning' | 'neutral'> = {
 }
 
 export default async function UsersPage() {
-  const auth = await requirePermission('user:read')
+  // `admin:access`, not `user:read`: a rep holds `user:read` so assignee pickers
+  // can list teammates, which is not the same as seeing everyone's role, status
+  // and last sign-in.
+  const guard = await pagePermission('admin:access')
+  if (!guard.ok) {
+    return (
+      <>
+        <PageHeader title="Users & teams" />
+        <AccessDenied what="Workspace administration" role={ROLE_LABELS[guard.role]} />
+      </>
+    )
+  }
+  const auth = guard.auth
 
   const { users, teams } = await withTenant(auth.tenant.id, async () => {
     const [users, teams] = await Promise.all([

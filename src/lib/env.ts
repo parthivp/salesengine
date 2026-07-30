@@ -37,8 +37,27 @@ const schema = z.object({
   SALESFORCE_CLIENT_SECRET: z.string().optional(),
 })
 
+/**
+ * In a `.env` file, `KEY=""` means "I have not set this" — it is how every example
+ * file in the world writes a blank to be filled in. Passing it through as the empty
+ * string makes each key with a default or an enum reject it, so copying
+ * `.env.example` and filling in only the values you need refused to boot with
+ * "Invalid environment configuration: EMAIL_TRANSPORT: invalid enum value". Treating
+ * blank as absent lets the defaults do their job.
+ *
+ * Genuinely required keys are unaffected: an absent DATABASE_URL still fails, which
+ * is the point of validating at all.
+ */
+function withoutBlanks(source: NodeJS.ProcessEnv): Record<string, string | undefined> {
+  const out: Record<string, string | undefined> = {}
+  for (const [key, value] of Object.entries(source)) {
+    out[key] = typeof value === 'string' && value.trim() === '' ? undefined : value
+  }
+  return out
+}
+
 function load() {
-  const parsed = schema.safeParse(process.env)
+  const parsed = schema.safeParse(withoutBlanks(process.env))
   if (!parsed.success) {
     const issues = parsed.error.issues
       .map((i) => `  ${i.path.join('.')}: ${i.message}`)

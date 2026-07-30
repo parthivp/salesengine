@@ -9,9 +9,22 @@ import type { UserRole } from '@prisma/client'
  * forty query builders.
  */
 
+/**
+ * `admin:access` gates the /admin surface itself, separately from the resource
+ * permissions the pages also need.
+ *
+ * The distinction is load-bearing and was found by walking the app as a rep. A rep
+ * holds `user:read` so that assignee pickers can list teammates, and `mailbox:read`
+ * so a sequence can show which identity will send. Gating the admin pages on those
+ * same permissions let a rep open /admin/users — everyone's role, status and last
+ * seen — and /admin/mailboxes, with its reputation and bounce figures. Reading a
+ * colleague's name and administering the workspace are different privileges, so
+ * they are now different permissions.
+ */
 export const PERMISSIONS = {
   owner: ['*'],
   admin: [
+    'admin:access',
     'tenant:read', 'tenant:update',
     'user:read', 'user:invite', 'user:update', 'user:disable',
     'team:*', 'customfield:*', 'integration:*', 'mailbox:*',

@@ -47,10 +47,14 @@ const SECTIONS: { title: string; items: Item[] }[] = [
   {
     title: 'Admin',
     items: [
-      { href: '/admin/users', label: 'Users & teams', icon: Users, permission: 'user:read' },
-      { href: '/admin/mailboxes', label: 'Mailboxes', icon: Mail, permission: 'mailbox:read' },
-      { href: '/admin/integrations', label: 'Integrations', icon: Plug, permission: 'integration:read' },
-      { href: '/admin/settings', label: 'Settings', icon: Settings, permission: 'tenant:update' },
+      // These must be the same permissions the pages check. When they were the
+      // resource permissions (`user:read`, `mailbox:read`) the nav showed a rep two
+      // admin pages it could actually open — the nav was right about the pages, and
+      // the pages were wrong.
+      { href: '/admin/users', label: 'Users & teams', icon: Users, permission: 'admin:access' },
+      { href: '/admin/mailboxes', label: 'Mailboxes', icon: Mail, permission: 'admin:access' },
+      { href: '/admin/integrations', label: 'Integrations', icon: Plug, permission: 'admin:access' },
+      { href: '/admin/settings', label: 'Settings', icon: Settings, permission: 'admin:access' },
       { href: '/admin/audit', label: 'Audit log', icon: Shield, permission: 'audit:read' },
     ],
   },

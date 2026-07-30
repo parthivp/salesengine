@@ -1,0 +1,14 @@
+<!--
+  The favicon. Next serves app/icon.svg at /icon.svg and links it automatically,
+  which stops every single page load from logging a 404 for /favicon.ico — the
+  browser asks for one whether or not the app provides it.
+
+  Same mark and same colour as the sidebar logo: the send arrow on brand-600,
+  which is oklch(0.55 0.175 255) converted to sRGB.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32">
+  <rect width="32" height="32" rx="7" fill="#0d70d4"/>
+  <path d="m7 14.5 18-8.5-8.5 18-2-7.5-7.5-2Z"
+        fill="none" stroke="#ffffff" stroke-width="2.6"
+        stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

@@ -1,6 +1,7 @@
-import { requirePermission } from '@/lib/auth'
+import { pagePermission } from '@/lib/auth'
 import { withTenant, db } from '@/lib/db'
-import { PageHeader, Card, Badge, EmptyState } from '@/components/ui'
+import { PageHeader, Card, Badge, EmptyState, AccessDenied } from '@/components/ui'
+import { ROLE_LABELS } from '@/lib/rbac'
 import { formatNumber, formatRelative } from '@/lib/utils'
 import { assessReputation, REPUTATION_LIMITS } from '@/lib/email/deliverability'
 import { sendingEnabled } from '@/lib/email/send'
@@ -20,7 +21,16 @@ const HEALTH_TONE: Record<MailboxHealth, 'success' | 'warning' | 'danger' | 'neu
 }
 
 export default async function MailboxesPage() {
-  const auth = await requirePermission('mailbox:read')
+  const guard = await pagePermission('admin:access')
+  if (!guard.ok) {
+    return (
+      <>
+        <PageHeader title="Mailboxes" />
+        <AccessDenied what="Mailbox administration" role={ROLE_LABELS[guard.role]} />
+      </>
+    )
+  }
+  const auth = guard.auth
 
   const mailboxes = await withTenant(auth.tenant.id, async () => {
     const rows = await db().mailbox.findMany({ orderBy: { createdAt: 'asc' } })

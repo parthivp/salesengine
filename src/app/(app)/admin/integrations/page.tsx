@@ -1,6 +1,7 @@
-import { requirePermission } from '@/lib/auth'
+import { pagePermission } from '@/lib/auth'
 import { withTenant, db } from '@/lib/db'
-import { PageHeader, Card, Badge, EmptyState } from '@/components/ui'
+import { PageHeader, Card, Badge, EmptyState, AccessDenied } from '@/components/ui'
+import { ROLE_LABELS } from '@/lib/rbac'
 import { formatNumber, formatRelative } from '@/lib/utils'
 import { Plug, AlertTriangle } from 'lucide-react'
 import { ConnectPanel, MappingTable, ConflictList, SyncControls } from './client'
@@ -10,7 +11,16 @@ export const metadata = { title: 'Integrations · SalesEngine' }
 export const dynamic = 'force-dynamic'
 
 export default async function IntegrationsPage() {
-  const auth = await requirePermission('integration:read')
+  const guard = await pagePermission('admin:access')
+  if (!guard.ok) {
+    return (
+      <>
+        <PageHeader title="Integrations" />
+        <AccessDenied what="Integrations" role={ROLE_LABELS[guard.role]} />
+      </>
+    )
+  }
+  const auth = guard.auth
 
   const data = await withTenant(auth.tenant.id, async () => {
     const connections = await db().crmConnection.findMany({

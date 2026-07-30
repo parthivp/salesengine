@@ -18,13 +18,16 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "db:seed-demo": "tsx scripts/seed-demo.ts",
-    "db:rescore": "tsx scripts/rescore.ts"
+    "db:rescore": "tsx scripts/rescore.ts",
+    "db:seed-sequences": "tsx scripts/seed-sequences.ts",
+    "start:standalone": "./scripts/prepare-standalone.sh && node .next/standalone/server.js"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"
   },
   "dependencies": {
     "@aws-sdk/client-sesv2": "3.723.0",
+    "@date-fns/tz": "^1.5.0",
     "@prisma/client": "6.16.2",
     "bcryptjs": "3.0.2",
     "bullmq": "5.58.5",

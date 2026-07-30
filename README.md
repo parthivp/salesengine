@@ -17,8 +17,8 @@ See [PLAN.md](./PLAN.md) for the full feature set, architecture and delivery roa
 | 0 | Scaffold — Compose stack, Prisma, worker, CI | **Shipped** |
 | 1 | Foundation — tenancy + RLS, auth, RBAC, teams, audit log | **Shipped** |
 | 2 | Lead database — contacts, accounts, CSV import, capture, Apollo enrichment, scoring | **Shipped** |
-| 3 | Email engine — SES, mailboxes, sequences, scheduler, deliverability | Next |
-| 4 | CRM — connector layer, Salesforce adapter, field mapping, sync | Planned |
+| 3 | Email engine — SES, mailboxes, sequences, scheduler, deliverability | **Shipped** |
+| 4 | CRM — connector layer, Salesforce adapter, field mapping, sync | Next |
 | 5 | Workflow — tasks, follow-ups, pipeline, reporting | Planned |
 | 6 | LinkedIn — Sales Nav import, AI drafting, human-in-the-loop queue | Planned |
 | 7 | Scale-out — HubSpot adapter, public API, webhooks | Planned |
@@ -65,7 +65,8 @@ Boots Postgres, Redis, migrations, the app and the worker. This is what runs on 
 | `AUTH_SECRET` | ≥32 chars. Session signing. |
 | `ENCRYPTION_KEY` | Exactly 32 bytes. AES-256-GCM for OAuth tokens and mailbox credentials. |
 | `APOLLO_API_KEY` | Lead search and enrichment (Phase 2). |
-| `AWS_*`, `SES_CONFIGURATION_SET` | Email sending (Phase 3). |
+| `EMAIL_TRANSPORT` | `log` \| `ses` \| `auto`. **Set `log` anywhere that is not production.** |
+| `AWS_*`, `SES_CONFIGURATION_SET` | Email sending via SES. |
 | `SALESFORCE_CLIENT_*` | CRM connected app (Phase 4). |
 
 The app validates all of these at boot and refuses to start on a bad config — a missing
@@ -91,7 +92,7 @@ Layer 3 is the one that matters: a forgotten `where` clause, a raw query, or a f
 still cannot read or write another tenant's data.
 
 ```bash
-npm test    # 24 tests, incl. 6 that try and fail to cross the tenant boundary
+npm test    # 93 tests, incl. 6 that try and fail to cross the tenant boundary
 ```
 
 ---
@@ -115,10 +116,38 @@ src/
     crypto.ts              AES-256-GCM sealing, token hashing
     queue.ts               BullMQ queues, job registry, repeatables
     audit.ts               append-only trail
+    email/
+      merge.ts             merge-tag rendering with fallbacks
+      schedule.ts          sending windows, timezones, mailbox capacity
+      send.ts              transports, signed tracking + unsubscribe links
+      deliverability.ts    SPF/DKIM/DMARC, content linting, reputation
   worker/
     index.ts               worker process entrypoint
-    handlers.ts            job handlers incl. the sequence scheduler tick
+    handlers.ts            job registry
+    jobs/
+      sequence.ts          the step machine, enrollment, reply handling
+      enrichment.ts        Apollo enrichment and rescoring
 ```
+
+---
+
+## Sending safety
+
+Real sending is opted into, never inherited. `EMAIL_TRANSPORT=log` runs the entire engine —
+scheduling, rendering, tracking links, status transitions — without anything leaving the
+server.
+
+This exists because it caught a real problem during development: the build environment had
+ambient AWS credentials, so `auto` armed live SES sending in a *test run*. Any CI runner or
+laptop with a shared AWS profile has the same exposure.
+
+The engine also refuses to send in these cases rather than sending something wrong:
+
+- an unresolved merge tag (`Hi {{first_name}},` reaching a prospect)
+- a mailbox failing SPF or DKIM
+- every mailbox at its daily cap — it defers instead
+- the contact replied, unsubscribed, bounced, or a colleague at the same account replied
+- bounce or complaint rates approaching the AWS thresholds
 
 ---
 
@@ -146,6 +175,8 @@ automated.
 | `npm run db:seed` | Seed tenants and users |
 | `npm run db:seed-demo` | Seed realistic contacts/accounts through the real import path |
 | `npm run db:rescore` | Recompute all scores after changing scoring rules |
+| `npm run db:seed-sequences` | Seed a mailbox, templates and a live sequence, driven through the real engine |
+| `npm run start:standalone` | Copy static assets into the standalone build and run it |
 | `npm run db:studio` | Prisma Studio |
 | `npm test` | Vitest, incl. isolation tests |
 | `npm run typecheck` | `tsc --noEmit` |

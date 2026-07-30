@@ -1,5 +1,5 @@
 import 'dotenv/config'
-import { prismaAdmin, withTenant, db, tid } from '../src/lib/db'
+import { prismaAdmin, withTenant, db, tid, disconnect } from '../src/lib/db'
 import { importContacts, parseCsv } from '../src/lib/leads/import'
 import { rescoreContact } from '../src/lib/leads/scoring'
 
@@ -242,4 +242,6 @@ main()
     console.error(e)
     process.exit(1)
   })
-  .finally(() => prismaAdmin.$disconnect())
+  // Closes both the runtime and owner clients; closing only one leaves the
+  // process alive with an open pool and the script appears to hang.
+  .finally(() => disconnect())

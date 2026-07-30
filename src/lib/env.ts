@@ -17,6 +17,16 @@ const schema = z.object({
     .string()
     .length(32, 'ENCRYPTION_KEY must be exactly 32 bytes for AES-256-GCM'),
 
+  /**
+   * Which transport actually sends. 'auto' picks SES when credentials exist.
+   *
+   * This exists because ambient AWS credentials — a CI runner, a dev laptop with
+   * a shared profile, this project's own sandbox — would otherwise silently arm
+   * real sending. Tests and local development set 'log'; production sets 'ses'
+   * or leaves it on 'auto'.
+   */
+  EMAIL_TRANSPORT: z.enum(['auto', 'log', 'ses']).default('auto'),
+
   AWS_REGION: z.string().default('us-east-1'),
   AWS_ACCESS_KEY_ID: z.string().optional(),
   AWS_SECRET_ACCESS_KEY: z.string().optional(),

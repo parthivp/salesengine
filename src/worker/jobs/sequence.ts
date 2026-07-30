@@ -1,0 +1,812 @@
+import { withTenant, db, tid, prismaAdmin } from '../../lib/db'
+import { logger } from '../../lib/logger'
+import { enqueue } from '../../lib/queue'
+import { domainFromEmail } from '../../lib/utils'
+import { render, valuesFor } from '../../lib/email/merge'
+import {
+  computeNextRunAt, windowFromSequence, pickMailbox, type MailboxCapacity,
+} from '../../lib/email/schedule'
+import {
+  transportFor, newMessageId, unsubscribeUrl, appendTrackingPixel,
+  rewriteLinksForTracking, textToHtml, type OutboundEmail,
+} from '../../lib/email/send'
+import { rescoreContact } from '../../lib/leads/scoring'
+import type { EnrollmentStatus, SequenceStep } from '@prisma/client'
+
+/**
+ * The sequence step machine.
+ *
+ * Correctness requirements, in the order they bite:
+ *
+ *  1. **Never double-send.** A retried job, a duplicated tick, or a crash
+ *     mid-send must not produce two emails. Achieved with an outbox row written
+ *     *before* the provider call, carrying a deterministic idempotency key that
+ *     is unique in the database.
+ *  2. **Never send after a reply.** Reply/bounce/unsubscribe set the enrollment
+ *     to stopped; the step re-reads status inside the same transaction that
+ *     claims the lock, so a reply landing mid-flight wins.
+ *  3. **Never hold a transaction open across HTTP.** The provider call sits
+ *     between two short transactions. A long interactive transaction pinned to
+ *     one connection would exhaust the pool under load.
+ *
+ * The shape is therefore: claim → prepare → (commit) → send → record.
+ */
+
+const LOCK_STALE_MS = 5 * 60_000
+
+type PreparedSend = {
+  kind: 'send'
+  messageRowId: string
+  email: OutboundEmail
+  provider: string
+  mailboxId: string
+  contactId: string
+  stepId: string
+}
+
+type PreparedOutcome =
+  | PreparedSend
+  | { kind: 'skip'; reason: string }
+  | { kind: 'stop'; status: EnrollmentStatus; reason: string }
+  | { kind: 'defer'; until: Date; reason: string }
+  | { kind: 'advanced' }
+  | { kind: 'completed' }
+
+export async function processEnrollmentStep({
+  enrollmentId,
+  tenantId,
+}: {
+  enrollmentId: string
+  tenantId: string
+}) {
+  const log = logger.child({ enrollmentId, tenantId })
+
+  // --- phase 1: claim and prepare (short transaction) ----------------------
+  const prepared = await withTenant(tenantId, () => claimAndPrepare(enrollmentId, log))
+
+  if (prepared.kind !== 'send') {
+    log.debug({ outcome: prepared.kind }, 'step resolved without sending')
+    return prepared
+  }
+
+  // --- phase 2: the provider call, deliberately outside any transaction ----
+  const transport = transportFor(prepared.provider)
+  const outcome = await transport.send(prepared.email)
+
+  // --- phase 3: record the result (short transaction) ----------------------
+  return withTenant(tenantId, async () => {
+    if (outcome.ok) {
+      await db().emailMessage.update({
+        where: { id: prepared.messageRowId },
+        data: {
+          status: 'sent',
+          sentAt: new Date(),
+          providerId: outcome.providerId,
+        },
+      })
+
+      await db().mailbox.update({
+        where: { id: prepared.mailboxId },
+        data: { sentToday: { increment: 1 }, sentTodayOn: new Date() },
+      })
+
+      await db().contact.update({
+        where: { id: prepared.contactId },
+        data: { lastContactedAt: new Date(), status: 'working' },
+      })
+
+      await db().activity.create({
+        data: {
+          tenantId: tid(),
+          type: 'email_sent',
+          summary: `Sent: ${prepared.email.subject}`,
+          contactId: prepared.contactId,
+          detail: { messageId: prepared.messageRowId, stepId: prepared.stepId },
+        },
+      })
+
+      await advance(enrollmentId)
+      await incrementUsage(tid(), 'emails_sent')
+      log.info({ to: prepared.email.to }, 'sequence email sent')
+      return { sent: true }
+    }
+
+    // Failure. Retryable failures leave the enrollment due again shortly;
+    // permanent ones stop it, so we do not grind against a rejected address.
+    await db().emailMessage.update({
+      where: { id: prepared.messageRowId },
+      data: { status: 'failed', failedAt: new Date(), error: outcome.error },
+    })
+
+    if (outcome.retryable) {
+      await db().sequenceEnrollment.update({
+        where: { id: enrollmentId },
+        data: {
+          lockedAt: null,
+          lockedBy: null,
+          attempts: { increment: 1 },
+          lastError: outcome.error,
+          nextRunAt: new Date(Date.now() + 15 * 60_000),
+        },
+      })
+      log.warn({ error: outcome.error }, 'send failed, will retry')
+      return { sent: false, retrying: true }
+    }
+
+    await db().sequenceEnrollment.update({
+      where: { id: enrollmentId },
+      data: {
+        status: 'failed',
+        lockedAt: null,
+        lockedBy: null,
+        lastError: outcome.error,
+        nextRunAt: null,
+        stoppedAt: new Date(),
+        stopReason: outcome.error,
+      },
+    })
+    log.error({ error: outcome.error }, 'send failed permanently, enrollment stopped')
+    return { sent: false, retrying: false }
+  })
+}
+
+// ---------------------------------------------------------------------------
+
+type Log = Pick<typeof logger, 'debug' | 'info' | 'warn' | 'error'>
+
+async function claimAndPrepare(
+  enrollmentId: string,
+  log: Log
+): Promise<PreparedOutcome> {
+  const enrollment = await db().sequenceEnrollment.findUnique({
+    where: { id: enrollmentId },
+    include: {
+      sequence: { include: { steps: { orderBy: { order: 'asc' } } } },
+      contact: { include: { account: true } },
+    },
+  })
+
+  if (!enrollment) return { kind: 'skip', reason: 'enrollment_missing' }
+  if (enrollment.status !== 'active') return { kind: 'skip', reason: `status_${enrollment.status}` }
+  if (enrollment.sequence.status !== 'active') {
+    return { kind: 'defer', until: new Date(Date.now() + 3_600_000), reason: 'sequence_not_active' }
+  }
+
+  // Lock: a stale lock is reclaimable so a crashed worker cannot wedge an
+  // enrollment forever, but a fresh one means another worker holds it.
+  if (enrollment.lockedAt && Date.now() - enrollment.lockedAt.getTime() < LOCK_STALE_MS) {
+    return { kind: 'skip', reason: 'locked_elsewhere' }
+  }
+
+  const claim = await db().sequenceEnrollment.updateMany({
+    where: {
+      id: enrollmentId,
+      status: 'active',
+      OR: [{ lockedAt: null }, { lockedAt: { lt: new Date(Date.now() - LOCK_STALE_MS) } }],
+    },
+    data: { lockedAt: new Date(), lockedBy: `worker:${process.pid}` },
+  })
+  if (claim.count === 0) return { kind: 'skip', reason: 'lost_lock_race' }
+
+  const { contact, sequence } = enrollment
+
+  // --- hard stops ---------------------------------------------------------
+  if (contact.unsubscribedAt) {
+    return stop(enrollmentId, 'stopped_unsubscribed', 'Contact unsubscribed')
+  }
+  if (contact.bouncedAt) {
+    return stop(enrollmentId, 'stopped_bounced', 'Previous email bounced')
+  }
+  if (!contact.email) {
+    return stop(enrollmentId, 'failed', 'Contact has no email address')
+  }
+  if (contact.status === 'do_not_contact') {
+    return stop(enrollmentId, 'stopped_manual', 'Contact marked do-not-contact')
+  }
+
+  const domain = domainFromEmail(contact.email)
+  const suppressed = await db().suppressionEntry.findFirst({
+    where: {
+      OR: [
+        { type: 'email', value: contact.email },
+        ...(domain ? [{ type: 'domain' as const, value: domain }] : []),
+      ],
+    },
+    select: { reason: true },
+  })
+  if (suppressed) {
+    return stop(enrollmentId, 'stopped_unsubscribed', `Suppressed (${suppressed.reason})`)
+  }
+
+  if (sequence.stopOnReply && contact.lastRepliedAt) {
+    return stop(enrollmentId, 'stopped_replied', 'Contact replied')
+  }
+
+  // Account-level reply: if a colleague already answered, continuing to email
+  // this person makes the whole team look uncoordinated.
+  if (sequence.stopOnAccountReply && contact.accountId) {
+    const colleagueReplied = await db().contact.findFirst({
+      where: {
+        accountId: contact.accountId,
+        id: { not: contact.id },
+        lastRepliedAt: { not: null },
+      },
+      select: { id: true },
+    })
+    if (colleagueReplied) {
+      return stop(enrollmentId, 'stopped_replied', 'Someone else at this account replied')
+    }
+  }
+
+  // --- which step? --------------------------------------------------------
+  const step = selectStep(enrollment.sequence.steps, enrollment.stepIndex, enrollment.id)
+  if (!step) {
+    await db().sequenceEnrollment.update({
+      where: { id: enrollmentId },
+      data: {
+        status: 'completed',
+        completedAt: new Date(),
+        nextRunAt: null,
+        lockedAt: null,
+        lockedBy: null,
+      },
+    })
+    return { kind: 'completed' }
+  }
+
+  const window = windowFromSequence(sequence, contact.timezone ?? 'Asia/Kolkata')
+
+  // --- conditions ---------------------------------------------------------
+  const conditionResult = await evaluateConditions(step, contact.id)
+  if (!conditionResult.pass) {
+    log.debug({ stepId: step.id, reason: conditionResult.reason }, 'condition not met; skipping step')
+    await advance(enrollmentId, window)
+    return { kind: 'advanced' }
+  }
+
+  // --- non-email steps ----------------------------------------------------
+  if (step.type === 'wait') {
+    await advance(enrollmentId, window)
+    return { kind: 'advanced' }
+  }
+
+  if (step.type === 'task' || step.type === 'call' || step.type.startsWith('linkedin')) {
+    await db().task.create({
+      data: {
+        tenantId: tid(),
+        type:
+          step.type === 'call' ? 'call'
+          : step.type.startsWith('linkedin') ? 'linkedin'
+          : 'follow_up',
+        title: step.taskNote?.slice(0, 200) ?? `${step.type.replace(/_/g, ' ')} — ${contact.email}`,
+        note: step.taskNote,
+        contactId: contact.id,
+        accountId: contact.accountId,
+        assigneeId: contact.ownerId,
+        dueAt: new Date(),
+        // The drafted message the rep will send themselves. This is the
+        // human-in-the-loop LinkedIn path — we never touch LinkedIn ourselves.
+        payload: step.type.startsWith('linkedin')
+          ? {
+              linkedinUrl: contact.linkedinUrl,
+              draft: render(step.bodyText ?? '', valuesFor(contact, { name: null, email: null })).text,
+              stepType: step.type,
+            }
+          : {},
+      },
+    })
+    await advance(enrollmentId, window)
+    return { kind: 'advanced' }
+  }
+
+  if (step.type !== 'email') {
+    await advance(enrollmentId, window)
+    return { kind: 'advanced' }
+  }
+
+  // --- mailbox capacity ---------------------------------------------------
+  const mailboxes = await db().mailbox.findMany({
+    where: { health: { in: ['healthy', 'warming'] } },
+  })
+  if (!mailboxes.length) {
+    // No mailbox connected yet. Defer rather than fail — the enrollment should
+    // resume by itself once an admin connects one.
+    return deferEnrollment(
+      enrollmentId,
+      new Date(Date.now() + 3_600_000),
+      'No sending mailbox available'
+    )
+  }
+
+  const preferred = enrollment.mailboxId
+    ? mailboxes.filter((m) => m.id === enrollment.mailboxId)
+    : mailboxes
+  const chosen =
+    pickMailbox(preferred as unknown as MailboxCapacity[]) ??
+    pickMailbox(mailboxes as unknown as MailboxCapacity[])
+
+  if (!chosen) {
+    // Every mailbox is capped for today — try again at the next window opening
+    // rather than sending over the cap.
+    const retryAt = computeNextRunAt({ delayMinutes: 60, window })
+    return deferEnrollment(enrollmentId, retryAt, 'All mailboxes at their daily cap')
+  }
+
+  const mailbox = mailboxes.find((m) => m.id === chosen.id)!
+
+  // --- render -------------------------------------------------------------
+  const owner = contact.ownerId
+    ? await db().user.findUnique({
+        where: { id: contact.ownerId },
+        select: { name: true, email: true },
+      })
+    : null
+
+  const sender = { name: owner?.name ?? mailbox.fromName, email: mailbox.email }
+  const values = valuesFor(contact, sender)
+
+  const template = step.templateId
+    ? await db().emailTemplate.findUnique({ where: { id: step.templateId } })
+    : null
+
+  const rawSubject = step.subject ?? template?.subject ?? ''
+  const rawText = step.bodyText ?? template?.bodyText ?? ''
+
+  const subject = render(rawSubject, values)
+  const text = render(rawText, values)
+
+  // An unresolved tag must never reach a prospect. Failing the step is the
+  // right outcome: the rep fixes the template, or adds a fallback.
+  const unresolved = [...new Set([...subject.unresolved, ...text.unresolved])]
+  if (unresolved.length) {
+    return stop(
+      enrollmentId,
+      'failed',
+      `Unresolved merge tags: ${unresolved.join(', ')}. Add a fallback like {{first_name | there}}.`
+    )
+  }
+
+  // --- outbox row, written BEFORE the provider call -----------------------
+  // The unique idempotency key is what makes a retry safe: a second attempt
+  // collides on the unique index instead of sending again.
+  const idempotencyKey = `${enrollment.id}:${step.id}:${enrollment.stepIndex}`
+
+  const already = await db().emailMessage.findFirst({
+    where: { idempotencyKey },
+    select: { id: true, status: true },
+  })
+  if (already && already.status !== 'failed') {
+    log.warn({ idempotencyKey, status: already.status }, 'step already has an outbox row; advancing')
+    await advance(enrollmentId, window)
+    return { kind: 'skip', reason: 'already_sent' }
+  }
+
+  const sendingDomain = domainFromEmail(mailbox.email) ?? 'localhost'
+  const rfcMessageId = newMessageId(sendingDomain)
+
+  const messageRow = await db().emailMessage.create({
+    data: {
+      tenantId: tid(),
+      direction: 'outbound',
+      status: 'queued',
+      contactId: contact.id,
+      mailboxId: mailbox.id,
+      enrollmentId: enrollment.id,
+      fromEmail: mailbox.email,
+      toEmail: contact.email,
+      subject: subject.text,
+      bodyText: text.text,
+      messageId: rfcMessageId,
+      threadKey: `${sequence.id}:${contact.id}`,
+      idempotencyKey: already ? `${idempotencyKey}:retry:${Date.now()}` : idempotencyKey,
+      scheduledAt: new Date(),
+    },
+  })
+
+  const unsubUrl = unsubscribeUrl(messageRow.id)
+  let html = textToHtml(text.text, unsubUrl)
+  if (sequence.trackClicks) html = rewriteLinksForTracking(html, messageRow.id)
+  if (sequence.trackOpens) html = appendTrackingPixel(html, messageRow.id)
+
+  // The stored copy must be byte-identical to what leaves the building. An
+  // archive that omits the unsubscribe footer cannot answer "what exactly did we
+  // send this person?", which is the only question that matters in a complaint.
+  const finalText = `${text.text}\n\n—\nUnsubscribe: ${unsubUrl}`
+
+  await db().emailMessage.update({
+    where: { id: messageRow.id },
+    data: { bodyHtml: html, bodyText: finalText },
+  })
+
+  return {
+    kind: 'send',
+    messageRowId: messageRow.id,
+    provider: mailbox.provider,
+    mailboxId: mailbox.id,
+    contactId: contact.id,
+    stepId: step.id,
+    email: {
+      from: { name: sender.name, email: mailbox.email },
+      to: contact.email,
+      replyTo: owner?.email ?? undefined,
+      subject: subject.text,
+      html,
+      text: finalText,
+      listUnsubscribeUrl: unsubUrl,
+      idempotencyKey: messageRow.id,
+      tags: { sequence: sequence.id.slice(0, 40), step: String(step.order) },
+    },
+  }
+}
+
+// ---------------------------------------------------------------------------
+// helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * A/B variants share an order. One is chosen per enrollment, deterministically
+ * from the enrollment id so a retry picks the same variant — otherwise a retried
+ * step could send variant B after variant A already went out.
+ */
+function selectStep(
+  steps: SequenceStep[],
+  index: number,
+  enrollmentId: string
+): SequenceStep | null {
+  const orders = [...new Set(steps.map((s) => s.order))].sort((a, b) => a - b)
+  const order = orders[index]
+  if (order == null) return null
+
+  const candidates = steps.filter((s) => s.order === order)
+  if (candidates.length === 1) return candidates[0]
+
+  const totalWeight = candidates.reduce((n, s) => n + Math.max(1, s.variantWeight), 0)
+  let hash = 0
+  for (let i = 0; i < enrollmentId.length; i++) {
+    hash = (hash * 31 + enrollmentId.charCodeAt(i)) % 100_000
+  }
+  let target = hash % totalWeight
+  for (const c of candidates) {
+    target -= Math.max(1, c.variantWeight)
+    if (target < 0) return c
+  }
+  return candidates[0]
+}
+
+type Condition = {
+  type?: 'always' | 'if_opened' | 'if_not_opened' | 'if_clicked' | 'if_not_clicked' | 'if_no_reply'
+  withinDays?: number
+}
+
+async function evaluateConditions(
+  step: SequenceStep,
+  contactId: string
+): Promise<{ pass: boolean; reason?: string }> {
+  const cond = (step.conditions ?? {}) as Condition
+  const type = cond.type ?? 'always'
+  if (type === 'always') return { pass: true }
+
+  const since = cond.withinDays
+    ? new Date(Date.now() - cond.withinDays * 86_400_000)
+    : undefined
+
+  const where = {
+    contactId,
+    direction: 'outbound' as const,
+    ...(since ? { sentAt: { gte: since } } : {}),
+  }
+
+  switch (type) {
+    case 'if_opened': {
+      const n = await db().emailMessage.count({ where: { ...where, opensCount: { gt: 0 } } })
+      return n > 0 ? { pass: true } : { pass: false, reason: 'not_opened' }
+    }
+    case 'if_not_opened': {
+      const n = await db().emailMessage.count({ where: { ...where, opensCount: { gt: 0 } } })
+      return n === 0 ? { pass: true } : { pass: false, reason: 'was_opened' }
+    }
+    case 'if_clicked': {
+      const n = await db().emailMessage.count({ where: { ...where, clicksCount: { gt: 0 } } })
+      return n > 0 ? { pass: true } : { pass: false, reason: 'not_clicked' }
+    }
+    case 'if_not_clicked': {
+      const n = await db().emailMessage.count({ where: { ...where, clicksCount: { gt: 0 } } })
+      return n === 0 ? { pass: true } : { pass: false, reason: 'was_clicked' }
+    }
+    case 'if_no_reply': {
+      const n = await db().emailMessage.count({
+        where: { contactId, direction: 'inbound', ...(since ? { createdAt: { gte: since } } : {}) },
+      })
+      return n === 0 ? { pass: true } : { pass: false, reason: 'replied' }
+    }
+    default:
+      return { pass: true }
+  }
+}
+
+async function advance(
+  enrollmentId: string,
+  window?: ReturnType<typeof windowFromSequence>
+): Promise<void> {
+  const enrollment = await db().sequenceEnrollment.findUniqueOrThrow({
+    where: { id: enrollmentId },
+    include: {
+      sequence: { include: { steps: { orderBy: { order: 'asc' } } } },
+      contact: { select: { timezone: true } },
+    },
+  })
+
+  const orders = [...new Set(enrollment.sequence.steps.map((s) => s.order))].sort((a, b) => a - b)
+  const nextIndex = enrollment.stepIndex + 1
+  const nextOrder = orders[nextIndex]
+
+  if (nextOrder == null) {
+    await db().sequenceEnrollment.update({
+      where: { id: enrollmentId },
+      data: {
+        status: 'completed',
+        stepIndex: nextIndex,
+        completedAt: new Date(),
+        nextRunAt: null,
+        lockedAt: null,
+        lockedBy: null,
+        currentStepId: null,
+      },
+    })
+    return
+  }
+
+  const nextStep = enrollment.sequence.steps.find((s) => s.order === nextOrder)!
+  const win =
+    window ??
+    windowFromSequence(enrollment.sequence, enrollment.contact.timezone ?? 'Asia/Kolkata')
+
+  const nextRunAt = computeNextRunAt({
+    delayMinutes: nextStep.delayMinutes,
+    window: win,
+    jitterMinutes: 20,
+  })
+
+  await db().sequenceEnrollment.update({
+    where: { id: enrollmentId },
+    data: {
+      stepIndex: nextIndex,
+      currentStepId: nextStep.id,
+      nextRunAt,
+      lockedAt: null,
+      lockedBy: null,
+      attempts: 0,
+      lastError: null,
+    },
+  })
+}
+
+async function stop(
+  enrollmentId: string,
+  status: EnrollmentStatus,
+  reason: string
+): Promise<PreparedOutcome> {
+  await db().sequenceEnrollment.update({
+    where: { id: enrollmentId },
+    data: {
+      status,
+      stoppedAt: new Date(),
+      stopReason: reason,
+      nextRunAt: null,
+      lockedAt: null,
+      lockedBy: null,
+    },
+  })
+  return { kind: 'stop', status, reason }
+}
+
+async function deferEnrollment(
+  enrollmentId: string,
+  until: Date,
+  reason: string
+): Promise<PreparedOutcome> {
+  await db().sequenceEnrollment.update({
+    where: { id: enrollmentId },
+    data: { nextRunAt: until, lockedAt: null, lockedBy: null, lastError: reason },
+  })
+  return { kind: 'defer', until, reason }
+}
+
+async function incrementUsage(tenantId: string, metric: string) {
+  const period = new Date().toISOString().slice(0, 7)
+  const existing = await db().usageCounter.findFirst({ where: { period, metric } })
+  if (existing) {
+    await db().usageCounter.update({ where: { id: existing.id }, data: { value: { increment: 1 } } })
+  } else {
+    await db().usageCounter.create({ data: { tenantId, period, metric, value: 1 } })
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Enrollment
+// ---------------------------------------------------------------------------
+
+export async function enrollContacts({
+  tenantId,
+  sequenceId,
+  contactIds,
+  enrolledById,
+}: {
+  tenantId: string
+  sequenceId: string
+  contactIds: string[]
+  enrolledById?: string
+}) {
+  return withTenant(
+    tenantId,
+    async () => {
+      const sequence = await db().sequence.findUniqueOrThrow({
+        where: { id: sequenceId },
+        include: { steps: { orderBy: { order: 'asc' } } },
+      })
+      if (!sequence.steps.length) throw new Error('Cannot enrol into a sequence with no steps')
+
+      const orders = [...new Set(sequence.steps.map((s) => s.order))].sort((a, b) => a - b)
+      const firstStep = sequence.steps.find((s) => s.order === orders[0])!
+
+      const contacts = await db().contact.findMany({
+        where: {
+          id: { in: contactIds },
+          email: { not: null },
+          unsubscribedAt: null,
+          bouncedAt: null,
+          status: { not: 'do_not_contact' },
+        },
+        select: { id: true, timezone: true, email: true },
+      })
+
+      let enrolled = 0
+      let skipped = contactIds.length - contacts.length
+
+      for (const contact of contacts) {
+        const existing = await db().sequenceEnrollment.findFirst({
+          where: { sequenceId, contactId: contact.id },
+          select: { id: true },
+        })
+        if (existing) {
+          skipped++
+          continue
+        }
+
+        const window = windowFromSequence(sequence, contact.timezone ?? 'Asia/Kolkata')
+        await db().sequenceEnrollment.create({
+          data: {
+            tenantId: tid(),
+            sequenceId,
+            contactId: contact.id,
+            currentStepId: firstStep.id,
+            stepIndex: 0,
+            status: 'active',
+            enrolledById,
+            nextRunAt: computeNextRunAt({
+              delayMinutes: firstStep.delayMinutes,
+              window,
+              jitterMinutes: 20,
+            }),
+          },
+        })
+        enrolled++
+      }
+
+      logger.info({ sequenceId, enrolled, skipped }, 'contacts enrolled')
+      return { enrolled, skipped }
+    },
+    { timeout: 120_000 }
+  )
+}
+
+/**
+ * Records an inbound reply and stops what should stop. Called by the mailbox
+ * poller (Gmail/IMAP) and by the SES inbound webhook.
+ */
+export async function recordReply({
+  tenantId,
+  contactId,
+  subject,
+  bodyText,
+  messageId,
+  inReplyTo,
+}: {
+  tenantId: string
+  contactId: string
+  subject: string
+  bodyText: string
+  messageId?: string
+  inReplyTo?: string
+}) {
+  return withTenant(tenantId, async () => {
+    const contact = await db().contact.findUniqueOrThrow({ where: { id: contactId } })
+
+    await db().emailMessage.create({
+      data: {
+        tenantId: tid(),
+        direction: 'inbound',
+        status: 'replied',
+        contactId,
+        fromEmail: contact.email ?? 'unknown',
+        toEmail: '',
+        subject,
+        bodyText,
+        messageId,
+        inReplyTo,
+        repliedAt: new Date(),
+      },
+    })
+
+    await db().contact.update({
+      where: { id: contactId },
+      data: { lastRepliedAt: new Date(), status: 'engaged' },
+    })
+
+    const stopped = await db().sequenceEnrollment.updateMany({
+      where: { contactId, status: 'active' },
+      data: {
+        status: 'stopped_replied',
+        stoppedAt: new Date(),
+        stopReason: 'Contact replied',
+        nextRunAt: null,
+      },
+    })
+
+    await db().activity.create({
+      data: {
+        tenantId: tid(),
+        type: 'reply',
+        summary: `Replied: ${subject}`.slice(0, 200),
+        contactId,
+        accountId: contact.accountId,
+      },
+    })
+
+    // A reply is the strongest buying signal we have; a follow-up task means it
+    // does not sit unread in a shared inbox.
+    if (contact.ownerId) {
+      await db().task.create({
+        data: {
+          tenantId: tid(),
+          type: 'follow_up',
+          title: `Reply from ${contact.firstName ?? contact.email}`,
+          note: bodyText.slice(0, 500),
+          contactId,
+          accountId: contact.accountId,
+          assigneeId: contact.ownerId,
+          dueAt: new Date(),
+          priority: 3,
+        },
+      })
+    }
+
+    await rescoreContact(contactId)
+    return { stoppedEnrollments: stopped.count }
+  })
+}
+
+/** Fans out due enrollments. Kept here so the tick and the machine live together. */
+export async function sequenceTick() {
+  const due = await prismaAdmin.sequenceEnrollment.findMany({
+    where: {
+      status: 'active',
+      nextRunAt: { lte: new Date() },
+      OR: [{ lockedAt: null }, { lockedAt: { lt: new Date(Date.now() - LOCK_STALE_MS) } }],
+    },
+    select: { id: true, tenantId: true },
+    take: 1000,
+    orderBy: { nextRunAt: 'asc' },
+  })
+
+  for (const e of due) {
+    await enqueue(
+      'sequence:step',
+      { enrollmentId: e.id, tenantId: e.tenantId },
+      { jobId: `step:${e.id}:${Math.floor(Date.now() / 60_000)}` }
+    )
+  }
+
+  if (due.length) logger.info({ count: due.length }, 'sequence tick fanned out')
+  return { dispatched: due.length }
+}

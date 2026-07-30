@@ -24,23 +24,23 @@ const SECTIONS: { title: string; items: Item[] }[] = [
     items: [
       { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
       { href: '/tasks', label: 'My tasks', icon: ListChecks, phase: 5 },
-      { href: '/inbox', label: 'Inbox', icon: Inbox, phase: 3 },
+      { href: '/inbox', label: 'Inbox', icon: Inbox },
       { href: '/linkedin', label: 'LinkedIn queue', icon: Linkedin, phase: 6 },
     ],
   },
   {
     title: 'Pipeline',
     items: [
-      { href: '/contacts', label: 'Contacts', icon: Users, permission: 'contact:read', phase: 2 },
-      { href: '/accounts', label: 'Accounts', icon: Building2, permission: 'account:read', phase: 2 },
+      { href: '/contacts', label: 'Contacts', icon: Users, permission: 'contact:read' },
+      { href: '/accounts', label: 'Accounts', icon: Building2, permission: 'account:read' },
       { href: '/deals', label: 'Deals', icon: Kanban, permission: 'deal:read', phase: 5 },
     ],
   },
   {
     title: 'Outreach',
     items: [
-      { href: '/sequences', label: 'Sequences', icon: Send, permission: 'sequence:read', phase: 3 },
-      { href: '/templates', label: 'Templates', icon: Mail, permission: 'template:read', phase: 3 },
+      { href: '/sequences', label: 'Sequences', icon: Send, permission: 'sequence:read' },
+      { href: '/templates', label: 'Templates', icon: Mail, permission: 'template:read' },
       { href: '/reports', label: 'Reports', icon: BarChart3, permission: 'report:read', phase: 5 },
     ],
   },
@@ -48,6 +48,7 @@ const SECTIONS: { title: string; items: Item[] }[] = [
     title: 'Admin',
     items: [
       { href: '/admin/users', label: 'Users & teams', icon: Users, permission: 'user:read' },
+      { href: '/admin/mailboxes', label: 'Mailboxes', icon: Mail, permission: 'mailbox:read' },
       { href: '/admin/integrations', label: 'Integrations', icon: Plug, permission: 'integration:read', phase: 4 },
       { href: '/admin/settings', label: 'Settings', icon: Settings, permission: 'tenant:update' },
       { href: '/admin/audit', label: 'Audit log', icon: Shield, permission: 'audit:read' },

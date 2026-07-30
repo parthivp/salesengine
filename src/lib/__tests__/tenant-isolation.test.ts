@@ -71,12 +71,24 @@ describe('tenant isolation (Postgres RLS)', () => {
     expect(found).toBeNull()
   })
 
-  it('scopes counts per tenant', async () => {
+  it('scopes counts per tenant, and the parts sum to the whole', async () => {
+    // Enumerate every tenant rather than assuming there are only two — other
+    // suites create their own, and a test that breaks when a tenant is added is
+    // testing the fixture, not the isolation.
+    const tenants = await owner.tenant.findMany({ select: { id: true } })
+    const counts = await Promise.all(
+      tenants.map((t) => asTenant(t.id, (tx) => tx.user.count()))
+    )
+    const total = await owner.user.count()
+
+    expect(counts.reduce((a, b) => a + b, 0)).toBe(total)
+
     const acmeCount = await asTenant(acmeId, (tx) => tx.user.count())
     const globexCount = await asTenant(globexId, (tx) => tx.user.count())
-    const total = await owner.user.count()
     expect(acmeCount).toBeGreaterThan(0)
     expect(globexCount).toBeGreaterThan(0)
-    expect(acmeCount + globexCount).toBe(total)
+    // Neither tenant can see the other's users, so neither count is the total.
+    expect(acmeCount).toBeLessThan(total)
+    expect(globexCount).toBeLessThan(total)
   })
 })

@@ -3,50 +3,9 @@ import { logger } from '../lib/logger'
 import { prismaAdmin, withTenant, db } from '../lib/db'
 import { enqueue } from '../lib/queue'
 import { enrichContacts, enrichAccounts, recomputeScores } from './jobs/enrichment'
+import { processEnrollmentStep, enrollContacts, sequenceTick as tick } from './jobs/sequence'
 
 type Handler<N extends JobName> = (data: JobMap[N]) => Promise<unknown>
-
-/**
- * The scheduler tick. Runs every minute.
- *
- * It does not do work — it finds enrollments that are due and fans out one job
- * per enrollment. This keeps the tick fast and bounded regardless of how many
- * contacts are enrolled, and means a slow send cannot stall the whole schedule.
- */
-const sequenceTick: Handler<'sequence:tick'> = async () => {
-  const due = await prismaAdmin.sequenceEnrollment.findMany({
-    where: {
-      status: 'active',
-      nextRunAt: { lte: new Date() },
-      OR: [{ lockedAt: null }, { lockedAt: { lt: new Date(Date.now() - 5 * 60_000) } }],
-    },
-    select: { id: true, tenantId: true },
-    take: 1000,
-    orderBy: { nextRunAt: 'asc' },
-  })
-
-  for (const e of due) {
-    await enqueue(
-      'sequence:step',
-      { enrollmentId: e.id, tenantId: e.tenantId },
-      // Idempotent within the minute: a duplicate tick cannot double-enqueue.
-      { jobId: `step:${e.id}:${Math.floor(Date.now() / 60_000)}` }
-    )
-  }
-
-  if (due.length) logger.info({ count: due.length }, 'sequence tick fanned out')
-  return { dispatched: due.length }
-}
-
-/** Phase 3 implements the step machine. Registered now so the wiring is testable. */
-const sequenceStep: Handler<'sequence:step'> = async ({ enrollmentId, tenantId }) => {
-  return withTenant(tenantId, async () => {
-    const enrollment = await db().sequenceEnrollment.findUnique({ where: { id: enrollmentId } })
-    if (!enrollment || enrollment.status !== 'active') return { skipped: true }
-    logger.debug({ enrollmentId }, 'sequence step — engine lands in Phase 3')
-    return { pending: true }
-  })
-}
 
 /** Resets per-mailbox daily counters and advances warm-up ramps. */
 const resetDailyCaps: Handler<'maintenance:reset-daily-caps'> = async () => {
@@ -97,9 +56,9 @@ function notYetImplemented<N extends JobName>(phase: string): Handler<N> {
 }
 
 export const handlers: { [N in JobName]?: Handler<N> } = {
-  'sequence:tick': sequenceTick,
-  'sequence:step': sequenceStep,
-  'sequence:enroll': notYetImplemented('Phase 3'),
+  'sequence:tick': tick,
+  'sequence:step': processEnrollmentStep,
+  'sequence:enroll': enrollContacts,
   'email:send': notYetImplemented('Phase 3'),
   'email:poll-replies': notYetImplemented('Phase 3'),
   'enrichment:contact': enrichContacts,

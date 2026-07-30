@@ -2,6 +2,7 @@ import type { JobMap, JobName } from '../lib/queue'
 import { logger } from '../lib/logger'
 import { prismaAdmin, withTenant, db } from '../lib/db'
 import { enqueue } from '../lib/queue'
+import { enrichContacts, enrichAccounts, recomputeScores } from './jobs/enrichment'
 
 type Handler<N extends JobName> = (data: JobMap[N]) => Promise<unknown>
 
@@ -101,11 +102,11 @@ export const handlers: { [N in JobName]?: Handler<N> } = {
   'sequence:enroll': notYetImplemented('Phase 3'),
   'email:send': notYetImplemented('Phase 3'),
   'email:poll-replies': notYetImplemented('Phase 3'),
-  'enrichment:contact': notYetImplemented('Phase 2'),
-  'enrichment:account': notYetImplemented('Phase 2'),
+  'enrichment:contact': enrichContacts,
+  'enrichment:account': enrichAccounts,
   'crm:pull': notYetImplemented('Phase 4'),
   'crm:push': notYetImplemented('Phase 4'),
-  'scoring:recompute': notYetImplemented('Phase 2'),
+  'scoring:recompute': recomputeScores,
   'maintenance:reset-daily-caps': resetDailyCaps,
   'maintenance:expire-sessions': expireSessions,
 }

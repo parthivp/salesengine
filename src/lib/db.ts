@@ -1,4 +1,4 @@
-import { PrismaClient, Prisma } from '@prisma/client'
+import { PrismaClient } from '@prisma/client'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { env, isDev } from './env'
 
@@ -7,7 +7,7 @@ import { env, isDev } from './env'
  *
  * Layer 2 is Postgres RLS (prisma/migrations/*_tenant_rls). This file is the
  * ergonomic layer: it sets `app.current_tenant` for the duration of a unit of
- * work and auto-injects `tenantId` into writes so callers cannot forget.
+ * work, and exposes `tid()` so writes can state their tenant explicitly.
  *
  * Because Prisma pools connections, `app.current_tenant` must be set with
  * transaction scope (`set_config(..., true)`) and every query in the unit of
@@ -56,21 +56,13 @@ type TenantContext = { tenantId: string; tx: TenantTx }
 
 const storage = new AsyncLocalStorage<TenantContext>()
 
-/** Models that carry a tenantId column and should be auto-scoped. */
-const TENANT_MODELS = new Set<string>([
-  'User', 'Team', 'Account', 'Contact', 'Lead', 'Sequence',
-  'SequenceEnrollment', 'Mailbox', 'EmailMessage', 'EmailTemplate', 'Task',
-  'Deal', 'PipelineStage', 'CrmConnection', 'SuppressionEntry', 'AuditLog',
-  'CustomFieldDef', 'ContactList', 'CaptureForm', 'Invite', 'ApiKey',
-  'UsageCounter', 'Activity',
-])
-
-const WRITE_OPS = new Set(['create', 'createMany', 'createManyAndReturn', 'upsert'])
-
 /**
  * Runs `fn` with `app.current_tenant` bound to `tenantId`. Every query issued
  * through `db()` inside the callback is isolated to that tenant by the database
  * itself, not merely by convention.
+ *
+ * `timeout` exists because bulk work — a 5,000-row CSV import, an enrichment
+ * batch — legitimately outlives the 15s default.
  */
 export async function withTenant<T>(
   tenantId: string,
@@ -101,7 +93,27 @@ export function db(): TenantTx {
   return ctx.tx
 }
 
-/** The tenant id for the current unit of work, if any. */
+/**
+ * The tenant id for the current unit of work. Throws outside `withTenant`.
+ *
+ * Writes pass this explicitly — `data: { tenantId: tid(), ... }`. An earlier
+ * draft injected it invisibly via a Prisma client extension; that was removed
+ * deliberately. TypeScript could not verify the injection, so every create site
+ * type-checked as if `tenantId` were optional when the database required it,
+ * and the compiler could no longer catch a genuinely missing tenant. Explicit
+ * is three extra tokens and one fewer class of runtime surprise.
+ */
+export function tid(): string {
+  const ctx = storage.getStore()
+  if (!ctx) {
+    throw new Error(
+      'tid() called outside a tenant context. Wrap the call in withTenant(tenantId, ...).'
+    )
+  }
+  return ctx.tenantId
+}
+
+/** The tenant id if one is bound, else null. For code that must work either way. */
 export function currentTenantId(): string | null {
   return storage.getStore()?.tenantId ?? null
 }
@@ -110,41 +122,6 @@ export function currentTenantId(): string | null {
 export function hasTenantContext(): boolean {
   return storage.getStore() !== undefined
 }
-
-/**
- * Auto-injects the ambient tenantId into creates so application code never has
- * to pass it. Reads are already constrained by RLS, so this deliberately does
- * not rewrite `where` clauses — that would hide bugs the database will catch.
- */
-export const tenantScoped = Prisma.defineExtension({
-  name: 'tenantScoped',
-  query: {
-    $allModels: {
-      async $allOperations({ model, operation, args, query }) {
-        const tenantId = currentTenantId()
-        if (!tenantId || !model || !TENANT_MODELS.has(model)) return query(args)
-        if (!WRITE_OPS.has(operation)) return query(args)
-
-        const a = args as Record<string, unknown>
-        if (operation === 'createMany' || operation === 'createManyAndReturn') {
-          const data = a.data
-          if (Array.isArray(data)) {
-            a.data = data.map((d) => ({ tenantId, ...(d as object) }))
-          } else if (data && typeof data === 'object') {
-            a.data = { tenantId, ...(data as object) }
-          }
-        } else if (operation === 'upsert') {
-          if (a.create && typeof a.create === 'object') {
-            a.create = { tenantId, ...(a.create as object) }
-          }
-        } else if (a.data && typeof a.data === 'object') {
-          a.data = { tenantId, ...(a.data as object) }
-        }
-        return query(a)
-      },
-    },
-  },
-})
 
 /** Graceful shutdown for the worker process. */
 export async function disconnect() {

@@ -3,7 +3,7 @@
 A multi-tenant sales engagement platform: Apollo-style lead intelligence + Dripify-style
 sequenced outreach + CRM sync, built for an internal sales team first and a SaaS product second.
 
-**Status:** Planning complete → Phase 0 (scaffold) in progress
+**Status:** Phases 0–2 shipped → Phase 3 (email engine) next
 **Owner:** Parthiv
 **Last updated:** 2026-07-30
 
@@ -13,7 +13,7 @@ sequenced outreach + CRM sync, built for an internal sales team first and a SaaS
 
 | Decision | Choice | Why |
 |---|---|---|
-| Stack | Next.js 15 (App Router) full-stack + separate worker process | One codebase, one deploy, no duplicate DTOs. Saves ~2–3 weeks vs. a separate NestJS API. |
+| Stack | Next.js 16 (App Router) full-stack + separate worker process | One codebase, one deploy, no duplicate DTOs. Saves ~2–3 weeks vs. a separate NestJS API. |
 | Language | TypeScript end to end | Shared types between UI, API routes, workers and DB. |
 | Database | PostgreSQL 16 + Prisma | Row-level tenant isolation, JSONB for custom fields, mature. |
 | Jobs | Redis 7 + BullMQ | Sequence scheduling, CRM sync, enrichment, email send. Long-running — needs a real worker, not serverless. |
@@ -137,7 +137,7 @@ fully automated with no such caveat.
 
 ```
                             ┌───────────────────────┐
-   Browser ────────────────►│  Next.js 15 (App Rtr) │
+   Browser ────────────────►│  Next.js 16 (App Rtr) │
    Chrome extension ───────►│  UI + API routes      │
                             │  Auth.js + RBAC       │
                             └───────┬───────────────┘
@@ -169,8 +169,10 @@ Every tenant-scoped table carries `tenantId`. Three layers of defence:
 1. **Postgres Row-Level Security** — policies keyed on a session variable
    `app.current_tenant`, set on every connection checkout. This is the backstop: even a
    forgotten `where` clause cannot leak across tenants.
-2. **Prisma client extension** — auto-injects `tenantId` into every `where`, `create` and
-   `update`. This is the ergonomic layer.
+2. **Explicit `tid()`** — every write states its tenant, and `tid()` throws outside a tenant
+   context. Shipped as a Prisma client extension first; removed because the invisible
+   injection made every create site type-check as though `tenantId` were optional, hiding the
+   class of bug it was meant to prevent.
 3. **Request context** — `AsyncLocalStorage` carries the resolved tenant from the session
    through to the DB layer, so no function has to thread it manually.
 

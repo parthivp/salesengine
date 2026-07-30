@@ -16,7 +16,9 @@
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "db:seed-demo": "tsx scripts/seed-demo.ts",
+    "db:rescore": "tsx scripts/rescore.ts"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"

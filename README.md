@@ -16,8 +16,8 @@ See [PLAN.md](./PLAN.md) for the full feature set, architecture and delivery roa
 |---|---|---|
 | 0 | Scaffold — Compose stack, Prisma, worker, CI | **Shipped** |
 | 1 | Foundation — tenancy + RLS, auth, RBAC, teams, audit log | **Shipped** |
-| 2 | Lead database — contacts, accounts, CSV import, capture, Apollo enrichment, scoring | Next |
-| 3 | Email engine — SES, mailboxes, sequences, scheduler, deliverability | Planned |
+| 2 | Lead database — contacts, accounts, CSV import, capture, Apollo enrichment, scoring | **Shipped** |
+| 3 | Email engine — SES, mailboxes, sequences, scheduler, deliverability | Next |
 | 4 | CRM — connector layer, Salesforce adapter, field mapping, sync | Planned |
 | 5 | Workflow — tasks, follow-ups, pipeline, reporting | Planned |
 | 6 | LinkedIn — Sales Nav import, AI drafting, human-in-the-loop queue | Planned |
@@ -79,7 +79,10 @@ Three layers, deliberately redundant:
 
 1. **Request context** — `AsyncLocalStorage` carries the resolved tenant from the session to
    the data layer, so no function threads it by hand.
-2. **Prisma extension** — auto-injects `tenantId` into writes (`src/lib/db.ts`).
+2. **Explicit `tid()`** — writes state their tenant (`data: { tenantId: tid(), ... }`), which
+   throws outside a tenant context. An earlier draft injected it invisibly via a Prisma client
+   extension; that was removed because TypeScript could not verify the injection, so every
+   create site type-checked as if `tenantId` were optional.
 3. **Postgres RLS** — every table carrying `tenantId` has `FORCE ROW LEVEL SECURITY` with a
    policy keyed on `current_setting('app.current_tenant')`. When unset it evaluates to NULL,
    so the default is *no rows*. Fail-closed by construction.
@@ -88,7 +91,7 @@ Layer 3 is the one that matters: a forgotten `where` clause, a raw query, or a f
 still cannot read or write another tenant's data.
 
 ```bash
-npm test    # 6 tests that try, and fail, to cross the boundary
+npm test    # 24 tests, incl. 6 that try and fail to cross the tenant boundary
 ```
 
 ---
@@ -140,7 +143,9 @@ automated.
 | `npm run build` | Production build |
 | `npm run db:migrate` | Create + apply a migration |
 | `npm run db:deploy` | Apply pending migrations |
-| `npm run db:seed` | Seed demo data |
+| `npm run db:seed` | Seed tenants and users |
+| `npm run db:seed-demo` | Seed realistic contacts/accounts through the real import path |
+| `npm run db:rescore` | Recompute all scores after changing scoring rules |
 | `npm run db:studio` | Prisma Studio |
 | `npm test` | Vitest, incl. isolation tests |
 | `npm run typecheck` | `tsc --noEmit` |

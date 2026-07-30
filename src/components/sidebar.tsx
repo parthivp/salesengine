@@ -25,7 +25,7 @@ const SECTIONS: { title: string; items: Item[] }[] = [
       { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
       { href: '/tasks', label: 'My tasks', icon: ListChecks },
       { href: '/inbox', label: 'Inbox', icon: Inbox },
-      { href: '/linkedin', label: 'LinkedIn queue', icon: Linkedin, phase: 6 },
+      { href: '/linkedin', label: 'LinkedIn queue', icon: Linkedin },
     ],
   },
   {

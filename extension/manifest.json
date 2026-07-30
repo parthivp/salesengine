@@ -1,0 +1,21 @@
+{
+  "manifest_version": 3,
+  "name": "SalesEngine LinkedIn Queue",
+  "version": "0.1.0",
+  "description": "Shows your SalesEngine LinkedIn queue on linkedin.com and fills the connection note. You click Send.",
+  "permissions": ["storage", "activeTab"],
+  "host_permissions": [
+    "https://www.linkedin.com/*",
+    "http://localhost:3000/*"
+  ],
+  "background": { "service_worker": "background.js", "type": "module" },
+  "action": { "default_popup": "popup.html", "default_title": "SalesEngine queue" },
+  "content_scripts": [
+    {
+      "matches": ["https://www.linkedin.com/*"],
+      "js": ["content.js"],
+      "css": ["content.css"],
+      "run_at": "document_idle"
+    }
+  ]
+}

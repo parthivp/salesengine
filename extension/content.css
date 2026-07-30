@@ -1,0 +1,52 @@
+#salesengine-queue-panel.se-panel {
+  position: fixed; right: 16px; bottom: 16px; z-index: 2147483000;
+  width: 320px; background: #fff; color: #0f172a;
+  border: 1px solid #e2e8f0; border-radius: 12px;
+  box-shadow: 0 6px 24px rgba(15, 23, 42, 0.12);
+  font: 13px/1.5 -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+#salesengine-queue-panel.se-collapsed {
+  width: auto; padding: 0; border: 0; box-shadow: none; background: transparent;
+}
+.se-reopen {
+  background: #2563eb; color: #fff; border: 0; border-radius: 999px;
+  padding: 8px 14px; font-weight: 600; cursor: pointer;
+  box-shadow: 0 4px 14px rgba(37, 99, 235, 0.35);
+}
+.se-head {
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 12px; border-bottom: 1px solid #eef1f5;
+}
+.se-title { font-weight: 600; }
+.se-count { margin-left: auto; color: #64748b; font-size: 12px; }
+.se-x {
+  background: transparent; border: 0; color: #64748b; cursor: pointer;
+  font-size: 16px; line-height: 1; padding: 0 4px;
+}
+.se-body { padding: 12px; }
+.se-name { margin: 0; font-weight: 600; }
+.se-muted { margin: 2px 0 0; color: #64748b; font-size: 12px; }
+.se-warn { margin: 2px 0 0; color: #b45309; font-size: 12px; font-weight: 500; }
+.se-good { color: #047857; }
+.se-note { margin-top: 4px; }
+#se-draft {
+  width: 100%; margin-top: 8px; padding: 8px; box-sizing: border-box;
+  border: 1px solid #e2e8f0; border-radius: 8px; font: inherit; resize: vertical;
+}
+.se-btn {
+  width: 100%; margin-top: 8px; padding: 8px 10px;
+  background: #2563eb; color: #fff; border: 0; border-radius: 8px;
+  font-weight: 500; cursor: pointer;
+}
+.se-btn:hover { background: #1d4ed8; }
+.se-secondary { background: #fff; color: #0f172a; border: 1px solid #e2e8f0; }
+.se-secondary:hover { background: #f8fafc; }
+.se-ok { background: #059669; }
+.se-ok:hover { background: #047857; }
+.se-row { display: flex; gap: 8px; align-items: center; }
+.se-row .se-btn { flex: 1; }
+.se-link, .se-linkbtn {
+  margin-top: 8px; background: transparent; border: 0; padding: 0;
+  color: #2563eb; font: inherit; cursor: pointer; text-decoration: none;
+}
+.se-status { margin: 8px 0 0; font-size: 12px; min-height: 1em; }

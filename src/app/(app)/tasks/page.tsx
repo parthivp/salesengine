@@ -157,7 +157,7 @@ export default async function TasksPage({
                   href="/tasks?view=team"
                   className="inline-flex items-center rounded-lg bg-brand-600 px-3 py-2 text-sm font-medium text-white hover:bg-brand-700 transition"
                 >
-                  View the team's tasks
+                  View the team’s tasks
                 </a>
               }
             />

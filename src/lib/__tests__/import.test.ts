@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { PrismaClient } from '@prisma/client'
-import { withTenant, db, prismaAdmin } from '../db'
+import { withTenant, db } from '../db'
 import { importContacts, parseCsv } from '../leads/import'
 import { nameSimilarity, normalizeLinkedIn, findDuplicates, mergeContacts } from '../leads/dedupe'
 import { computeScore, scoreBand } from '../leads/scoring'

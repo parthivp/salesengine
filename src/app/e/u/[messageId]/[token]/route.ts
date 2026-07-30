@@ -1,7 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import { prismaAdmin, withTenant, db, tid } from '@/lib/db'
 import { verifyToken } from '@/lib/email/send'
-import { domainFromEmail } from '@/lib/utils'
 import { logger } from '@/lib/logger'
 
 /**

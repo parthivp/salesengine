@@ -64,7 +64,6 @@ export type Hook = {
   strength: number
 }
 
-const SENIOR = /\b(chief|c[etoi]o|cxo|founder|owner|president|vp|vice[- ]president|head of|director|partner)\b/i
 
 /**
  * Order is load-bearing: the first match wins, so the *specific* patterns come

@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest'
 import { PrismaClient } from '@prisma/client'
-import { withTenant, db } from '../db'
+import { withTenant } from '../db'
 import { FakeCrm } from '../crm/fake'
 import { pullObject, pushObject, syncConnection } from '../crm/sync'
 import {

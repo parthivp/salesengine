@@ -1,5 +1,6 @@
 import { db } from '../db'
 import type { Contact, Account } from '@prisma/client'
+import { SENIOR_TITLE, MANAGER_TITLE, JUNIOR_TITLE, BUYER_FUNCTION } from '../titles'
 
 /**
  * Lead scoring, split into two axes because they answer different questions:
@@ -32,11 +33,6 @@ export type ScoreContext = {
   }
 }
 
-const SENIOR_TITLE =
-  /\b(chief|c[etoi]o|cxo|founder|owner|president|vp|vice[- ]president|head of|director|partner)\b/i
-const MANAGER_TITLE = /\b(manager|lead|principal|senior)\b/i
-const JUNIOR_TITLE = /\b(intern|trainee|apprentice|assistant|junior|jr\.?|graduate|student)\b/i
-const BUYER_FUNCTION = /\b(sales|revenue|growth|marketing|demand|bizdev|business development)\b/i
 
 export const RULES: ScoreRule[] = [
   // --- fit -----------------------------------------------------------------
@@ -113,6 +109,20 @@ export type ScoreBreakdown = {
   applied: { key: string; label: string; points: number }[]
 }
 
+/**
+ * Whole days since `date`, or null when there is no date.
+ *
+ * Extracted because the same expression was written out in two places — here in
+ * `rescoreContact` and again in the contact detail page — and two copies of a
+ * recency rule is how a score comes to disagree with the number displayed beside
+ * it. It also moves the `Date.now()` call out of a React component body, where the
+ * lint rule against impure calls during render was flagging it.
+ */
+export function daysSince(date: Date | null | undefined): number | null {
+  if (!date) return null
+  return Math.floor((Date.now() - date.getTime()) / 86_400_000)
+}
+
 export function computeScore(ctx: ScoreContext): ScoreBreakdown {
   const applied: ScoreBreakdown['applied'] = []
   let fit = 0
@@ -164,9 +174,7 @@ export async function rescoreContact(contactId: string): Promise<ScoreBreakdown>
       clicks: clicks._sum.clicksCount ?? 0,
       replies,
       formSubmissions: contact.source === 'form' ? 1 : 0,
-      daysSinceLastActivity: lastActivity
-        ? Math.floor((Date.now() - lastActivity.occurredAt.getTime()) / 86_400_000)
-        : null,
+      daysSinceLastActivity: daysSince(lastActivity?.occurredAt),
     },
   })
 

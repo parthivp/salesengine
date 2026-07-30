@@ -1,5 +1,6 @@
 import { db, tid } from '../db'
 import { draftMessage, checkDraft, type DraftContext, type Draft, type DraftCheck } from './draft'
+import { SENIOR_TITLE } from '../titles'
 import { assessPacing, type LinkedInActionType, ACTION_LABEL } from './policy'
 import type { Task } from '@prisma/client'
 
@@ -189,7 +190,7 @@ function rationaleFor(
   else if (contact.lastContactedAt) out.push('Already emailed, no reply yet')
   if (contact.score >= 60) out.push(`Score ${contact.score} — strong fit`)
   else if (contact.score >= 30) out.push(`Score ${contact.score}`)
-  if (ctx.title && /\b(chief|c[etoi]o|founder|vp|head of|director)\b/i.test(ctx.title)) {
+  if (ctx.title && SENIOR_TITLE.test(ctx.title)) {
     out.push('Senior title')
   }
   if (ctx.employeeCount != null && ctx.employeeCount >= 50 && ctx.employeeCount <= 5000) {

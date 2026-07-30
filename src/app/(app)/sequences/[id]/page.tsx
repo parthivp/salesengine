@@ -8,7 +8,6 @@ import { lintContent } from '@/lib/email/deliverability'
 import { unknownTags } from '@/lib/email/merge'
 import { ArrowLeft, Mail, Clock, ListChecks, Phone, Linkedin, GitBranch } from 'lucide-react'
 import { SequenceControls } from './controls'
-import type { StepType } from '@prisma/client'
 
 export const dynamic = 'force-dynamic'
 
@@ -241,7 +240,7 @@ export default async function SequenceDetailPage({
             </div>
             <dl className="p-5 space-y-2.5 text-sm">
               <Row label="Window">
-                {sequence.sendWindowStart}:00 – {sequence.sendWindowEnd}:00, prospect's timezone
+                {sequence.sendWindowStart}:00 – {sequence.sendWindowEnd}:00, prospect’s timezone
               </Row>
               <Row label="Days">{dayNames(sequence.sendDays)}</Row>
               <Row label="Daily enrol cap">{formatNumber(sequence.dailyEnrollCap)}</Row>
@@ -254,7 +253,7 @@ export default async function SequenceDetailPage({
             </dl>
             {!sequence.trackOpens && (
               <p className="px-5 pb-4 text-xs text-ink-500">
-                Open tracking is off by default. Apple Mail Privacy Protection and Gmail's image
+                Open tracking is off by default. Apple Mail Privacy Protection and Gmail’s image
                 proxy pre-fetch pixels, so opens over-report and the pixel itself is a minor
                 deliverability cost.
               </p>

@@ -315,7 +315,7 @@ export function ConflictList({
                 disabled={pending}
                 className="rounded-lg border border-ink-200 px-2.5 py-1.5 text-xs font-medium hover:bg-ink-50 disabled:opacity-50 transition"
               >
-                Keep CRM's
+                Keep CRM’s
               </button>
             </div>
           </li>

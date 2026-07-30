@@ -235,3 +235,42 @@ automated.
 | `npm run db:studio` | Prisma Studio |
 | `npm test` | Vitest, incl. isolation tests |
 | `npm run typecheck` | `tsc --noEmit` |
+| `npm run lint` | ESLint (flat config) |
+| `node scripts/smoke.mjs` | Walk every route as each role; fails on any error or wrong authorization |
+
+## Dependency advisories
+
+`npm audit` reports zero vulnerabilities in what ships:
+
+```
+npm audit --omit=dev     # none
+```
+
+The full audit reports 9 high advisories, all in the **dev-only lint toolchain**
+and all the same root cause: `eslint-plugin-import@2.32.0` (the current release)
+depends on `minimatch@^3`, which depends on a `brace-expansion` with an
+unbounded-expansion DoS. Nothing here is reachable at runtime — the linter runs
+over this repo's own source, on a developer machine, and is not part of the build
+output.
+
+Two fixes were tried and reverted, because both broke the toolchain while
+satisfying the audit:
+
+- **Overriding `brace-expansion` to a patched 5.x.** `minimatch@3` does
+  `require('brace-expansion')` and calls the result; v5 exports a namespace
+  object, so every lint run died with `TypeError: expand is not a function`.
+- **Upgrading to `eslint@10`**, which npm suggests. `eslint-plugin-react` — a
+  dependency of `eslint-config-next` — declares `eslint: ^9.7` at most, and eslint
+  10 changed a rule-context API it uses, so linting failed with
+  `contextOrFilename.getFilename is not a function`.
+
+The remaining advisories clear when `eslint-plugin-import` moves off `minimatch@3`.
+Re-check on any `eslint-config-next` upgrade. A linter that runs is worth more
+than a green audit for a DoS in a glob parser we feed our own config to.
+
+Overrides that *are* in place, in `package.json`:
+
+| Package | Why |
+|---|---|
+| `postcss` → 8.5.25 | Next pins 8.4.31 internally (sourceMappingURL path traversal, XSS) |
+| `sharp` → 0.35.3 | Next pins 0.34.5 (inherited libvips CVEs) |

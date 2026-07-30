@@ -2,7 +2,6 @@ import { NextResponse, type NextRequest } from 'next/server'
 import { prismaAdmin, withTenant, db, tid } from '@/lib/db'
 import { logger } from '@/lib/logger'
 import { assessReputation } from '@/lib/email/deliverability'
-import { domainFromEmail } from '@/lib/utils'
 
 /**
  * SES event notifications, delivered via SNS.

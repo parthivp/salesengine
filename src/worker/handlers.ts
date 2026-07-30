@@ -1,7 +1,6 @@
 import type { JobMap, JobName } from '../lib/queue'
 import { logger } from '../lib/logger'
-import { prismaAdmin, withTenant, db } from '../lib/db'
-import { enqueue } from '../lib/queue'
+import { prismaAdmin } from '../lib/db'
 import { enrichContacts, enrichAccounts, recomputeScores } from './jobs/enrichment'
 import { processEnrollmentStep, enrollContacts, sequenceTick as tick } from './jobs/sequence'
 import { crmPull, crmPush, crmSyncAll, crmSyncDue, crmLogActivity } from './jobs/crm'

@@ -4,7 +4,7 @@ import { requirePermission } from '@/lib/auth'
 import { withTenant, db } from '@/lib/db'
 import { PageHeader, Card, Badge } from '@/components/ui'
 import { displayName, formatRelative, formatNumber, initials } from '@/lib/utils'
-import { scoreBand, computeScore } from '@/lib/leads/scoring'
+import { scoreBand, computeScore, daysSince } from '@/lib/leads/scoring'
 import { ArrowLeft, Mail, Phone, Linkedin, Building2, MapPin } from 'lucide-react'
 
 export const dynamic = 'force-dynamic'
@@ -59,9 +59,7 @@ export default async function ContactDetailPage({
         clicks: emails.reduce((n, e) => n + e.clicksCount, 0),
         replies: emails.filter((e) => e.direction === 'inbound').length,
         formSubmissions: contact.source === 'form' ? 1 : 0,
-        daysSinceLastActivity: activities[0]
-          ? Math.floor((Date.now() - activities[0].occurredAt.getTime()) / 86_400_000)
-          : null,
+        daysSinceLastActivity: daysSince(activities[0]?.occurredAt),
       },
     })
 

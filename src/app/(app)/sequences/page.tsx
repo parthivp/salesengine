@@ -3,7 +3,7 @@ import { requirePermission } from '@/lib/auth'
 import { withTenant, db } from '@/lib/db'
 import { PageHeader, Card, Badge, EmptyState, StatTile } from '@/components/ui'
 import { formatNumber, formatRelative } from '@/lib/utils'
-import { Send, Plus } from 'lucide-react'
+import { Send } from 'lucide-react'
 import type { SequenceStatus } from '@prisma/client'
 import { NewSequenceButton } from './new-sequence'
 

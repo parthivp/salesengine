@@ -24,9 +24,23 @@ export function TemplateComposer() {
   const [error, setError] = useState<string | null>(null)
   const [pending, startTransition] = useTransition()
 
+  /**
+   * Clearing the "saved" badge belongs to the edit, not to the effect.
+   *
+   * It used to be the first line of the debounce effect, which meant a synchronous
+   * setState during the effect body and a second render pass on every keystroke.
+   * Editing is the event that invalidates the badge, so it clears where the edit
+   * happens.
+   */
+  function edit(set: (v: string) => void) {
+    return (value: string) => {
+      set(value)
+      setSaved(false)
+    }
+  }
+
   // Debounced live preview against a real contact.
   useEffect(() => {
-    setSaved(false)
     const t = setTimeout(() => {
       startTransition(async () => {
         const r = await previewTemplate({ subject, bodyText: body })
@@ -79,7 +93,7 @@ export function TemplateComposer() {
             <input
               id="tpl-subject"
               value={subject}
-              onChange={(e) => setSubject(e.target.value)}
+              onChange={(e) => edit(setSubject)(e.target.value)}
               className="w-full rounded-lg border border-ink-200 px-3 py-2 text-sm font-mono focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20 outline-none transition"
             />
             <p className="mt-1 text-xs text-ink-400">
@@ -94,7 +108,7 @@ export function TemplateComposer() {
             <textarea
               id="tpl-body"
               value={body}
-              onChange={(e) => setBody(e.target.value)}
+              onChange={(e) => edit(setBody)(e.target.value)}
               rows={12}
               className="w-full rounded-lg border border-ink-200 px-3 py-2 text-sm font-mono leading-relaxed focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20 outline-none transition"
             />

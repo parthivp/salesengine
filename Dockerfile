@@ -38,11 +38,14 @@ COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 COPY --from=builder --chown=nextjs:nodejs /app/public ./public
 
-# The worker and migrations run from the same image, so they need the full
-# node_modules, the Prisma schema and the TypeScript sources.
+# The worker, migrations and the operator scripts all run from this same image,
+# so it needs the full node_modules, the Prisma schema, the TypeScript sources
+# and scripts/ — the compose `migrate` step runs scripts/provision-db.ts, and
+# `docker compose exec app` is how a workspace gets created and readiness checked.
 COPY --from=builder --chown=nextjs:nodejs /app/node_modules ./node_modules
 COPY --from=builder --chown=nextjs:nodejs /app/prisma ./prisma
 COPY --from=builder --chown=nextjs:nodejs /app/src ./src
+COPY --from=builder --chown=nextjs:nodejs /app/scripts ./scripts
 COPY --from=builder --chown=nextjs:nodejs /app/package.json ./package.json
 COPY --from=builder --chown=nextjs:nodejs /app/tsconfig.json ./tsconfig.json
 

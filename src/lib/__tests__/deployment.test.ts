@@ -168,6 +168,44 @@ describe('the Dockerfile', () => {
     }
   })
 
+  it('contains every file it is asked to run', () => {
+    // The complement of the test above, and the one that would have caught the
+    // real failure: the runner stage copied src/ and prisma/ but not scripts/,
+    // while the compose `migrate` step runs scripts/provision-db.ts. Migrations
+    // applied, then the container died with ERR_MODULE_NOT_FOUND. Steps that come
+    // later — create-tenant.ts, check.ts — would have failed the same way.
+    //
+    // Checking that copied paths exist is not enough; the referenced paths have to
+    // be covered too, and nothing else compares those two lists.
+    const referenced = new Set(
+      [
+        ...compose.matchAll(/(?:npx tsx|node)\s+(scripts\/[\w.-]+\.(?:ts|mjs))/g),
+        ...readFileSync(join(root, 'DEPLOYMENT.md'), 'utf8')
+          .split('\n')
+          // Only lines that run something *inside* a container. init-env.mjs runs
+          // on the host through a bind mount, so it need not be in the image.
+          .filter((l) => l.includes('docker compose exec'))
+          .join('\n')
+          .matchAll(/(scripts\/[\w.-]+\.(?:ts|mjs))/g),
+      ].map((m) => m[1])
+    )
+
+    expect(referenced.size).toBeGreaterThan(0)
+
+    const copiedDirs = [...dockerfile.matchAll(/^COPY(?:\s+--\S+)*\s+\/app\/(\S+)\s+\S+$/gm)].map(
+      (m) => m[1]
+    )
+
+    for (const ref of referenced) {
+      const dir = ref.split('/')[0]
+      expect(
+        copiedDirs.includes(dir),
+        `the image runs "${ref}" but the Dockerfile never copies "${dir}/"`
+      ).toBe(true)
+      expect(existsSync(join(root, ref)), `${ref} does not exist`).toBe(true)
+    }
+  })
+
   it('does not bake a real secret into the image', () => {
     // Placeholders are needed at build time for `prisma generate` and the Next
     // build; they must be obviously inert.

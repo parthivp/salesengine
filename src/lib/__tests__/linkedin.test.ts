@@ -3,7 +3,7 @@ import { PrismaClient } from '@prisma/client'
 import { withTenant, db } from '../db'
 import { LINKEDIN_POLICY, assessPacing, DAILY_CEILINGS, withinLimit, LIMITS } from '../linkedin/policy'
 import { draftMessage, checkDraft, groundedHooks, tighten, placeWithArticle, type DraftContext } from '../linkedin/draft'
-import { parseSalesNav, importSalesNav } from '../linkedin/import'
+import { parseSalesNav, importSalesNav, parseHeadcount } from '../linkedin/import'
 import { SALESNAV_FIELDS, SALESNAV_ALIASES } from '../linkedin/fields'
 import { buildQueue, recordAction, enqueueContacts } from '../linkedin/queue'
 
@@ -150,6 +150,34 @@ describe('drafting', () => {
     // But a real signal alongside it is not generic.
     const better = draftMessage({ ...ctx, industry: 'Legal services' })
     expect(better.generic).toBe(false)
+  })
+
+  it('has something to say to a founder, a partner and a CEO', () => {
+    // The functional list covered RevOps, sales, marketing, ops, engineering,
+    // finance and HR — and nothing at all for the titles that dominate a
+    // professional-services or early-stage book. Those all fell through to the
+    // city hook and drafted from geography.
+    for (const title of ['Partner', 'Founder & Builder', 'CEO', 'General Counsel', 'Managing Director']) {
+      const d = draftMessage({ firstName: 'Sam', company: 'Acme', title, city: 'Leeds' })
+      expect(d.usedHooks, title).toContain('function')
+      expect(d.generic, title).toBe(false)
+    }
+  })
+
+  it('does not mistake a partnerships role for a partner', () => {
+    // "Partner" in a business-development title is not seniority. Matching it
+    // would hand a channel manager an opener about originating their own work.
+    for (const title of ['Partnerships Manager', 'Channel Partner Manager', 'Partner Programs Lead']) {
+      const hooks = groundedHooks({ title })
+      expect(hooks.some((h) => h.key === 'function'), title).toBe(false)
+    }
+  })
+
+  it('lets a real function outrank seniority in the same title', () => {
+    // "Founder & CRO" is a sales conversation, not a founder one — the specific
+    // hook must win, which is what the ordering of the list is for.
+    const d = draftMessage({ firstName: 'Sam', title: 'Founder & CRO', company: 'Acme' })
+    expect(d.text).toContain('pipeline coverage')
   })
 
   it('puts an article in front of a region but not a city', () => {
@@ -415,6 +443,47 @@ https://linkedin.com/in/marcusberg,Marcus,Helio Freight,www.heliofreight.com/abo
 
     const marcus = await owner.contact.findFirstOrThrow({ where: { tenantId, firstName: 'Marcus' } })
     expect(marcus.country).toBe('Germany')
+  })
+
+  it('carries industry and headcount onto the account', async () => {
+    // The point of accepting these columns: they are what the drafts read, and
+    // every enrichment provider puts its API behind a paid tier. Sales Navigator
+    // shows both on screen, so a hand-typed file gets the same drafts.
+    const p = parseSalesNav(
+      `Profile URL,First Name,Company,Company Domain,Industry,Headcount
+https://linkedin.com/in/borongliu,Borong,Zhong Lun Law Firm,zhonglun.com,Legal services,"2,500"
+`
+    )
+    expect(p.suggested.industry).toBe('Industry')
+    expect(p.suggested.employeeCount).toBe('Headcount')
+
+    await withTenant(tenantId, () => importSalesNav({ rows: p.rows, mapping: p.suggested }))
+
+    const account = await owner.account.findFirstOrThrow({
+      where: { tenantId, name: 'Zhong Lun Law Firm' },
+    })
+    expect(account.industry).toBe('Legal services')
+    expect(account.employeeCount).toBe(2500)
+
+    // And the draft stops being city-only as a direct result.
+    const contact = await owner.contact.findFirstOrThrow({ where: { tenantId, firstName: 'Borong' } })
+    expect(contact.accountId).toBe(account.id)
+  })
+
+  it('reads headcount the way people actually write it', () => {
+    expect(parseHeadcount('2,500')).toBe(2500)
+    expect(parseHeadcount('51-200')).toBe(51) // a band takes its lower bound
+    expect(parseHeadcount('51 – 200 employees')).toBe(51)
+    expect(parseHeadcount('1001+')).toBe(1001)
+    expect(parseHeadcount('~2500')).toBe(2500)
+    expect(parseHeadcount('2.5k')).toBe(2500)
+    expect(parseHeadcount('11 to 50')).toBe(11)
+    // Nothing usable is undefined, never NaN — a NaN here becomes a null nobody
+    // can explain, with the column mapped and a value visibly present.
+    expect(parseHeadcount('unknown')).toBeUndefined()
+    expect(parseHeadcount('')).toBeUndefined()
+    expect(parseHeadcount(undefined)).toBeUndefined()
+    expect(parseHeadcount('0')).toBeUndefined()
   })
 
   it('offers every field the importer understands', () => {

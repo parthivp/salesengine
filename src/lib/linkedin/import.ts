@@ -79,6 +79,8 @@ const rowSchema = z.object({
   title: z.string().max(200).optional(),
   companyName: z.string().max(200).optional(),
   companyDomain: z.string().max(200).optional(),
+  industry: z.string().max(120).optional(),
+  employeeCount: z.string().max(40).optional(),
   email: z.string().max(254).optional(),
   city: z.string().max(160).optional(),
   country: z.string().max(100).optional(),
@@ -125,6 +127,36 @@ function humaniseIssues(issues: { path: PropertyKey[]; message: string }[]): str
       return label ? `${label}: ${issue.message.toLowerCase()}` : issue.message
     })
     .join('; ')
+}
+
+/**
+ * Headcount as people actually write it down.
+ *
+ * Sales Navigator shows a band ("51-200 employees"), spreadsheets carry "1,200",
+ * and a person typing by hand writes "~2500" or "2.5k". A plain `Number()` turns
+ * every one of those into NaN, which would be stored as a null nobody could
+ * explain — the column was mapped, the value was there, and the field came out
+ * empty.
+ *
+ * A range takes its lower bound, deliberately. The draft bands on 50 and 1000, and
+ * understating headcount picks the more modest opener, which is the safer error.
+ */
+export function parseHeadcount(v: string | undefined): number | undefined {
+  if (!v) return undefined
+  const cleaned = v.replace(/,/g, '').replace(/\s+/g, ' ').trim()
+
+  // "51-200", "51 – 200", "1001+" → take the first number.
+  const first = cleaned.match(/(\d+(?:\.\d+)?)\s*([km])?/i)
+  if (!first) return undefined
+
+  let n = Number(first[1])
+  const unit = first[2]?.toLowerCase()
+  if (unit === 'k') n *= 1_000
+  else if (unit === 'm') n *= 1_000_000
+
+  if (!Number.isFinite(n) || n <= 0) return undefined
+  // Nobody employs a fraction of a person, and nobody employs ten million.
+  return Math.min(Math.round(n), 10_000_000)
 }
 
 function tidyDomain(v: string | undefined): string | undefined {
@@ -244,6 +276,7 @@ export async function importSalesNav(opts: {
       }
 
       const domain = tidyDomain(d.companyDomain) ?? (email ? domainFromEmail(email) ?? undefined : undefined)
+      const headcount = parseHeadcount(d.employeeCount)
 
       let accountId: string | null = null
       if (domain) {
@@ -254,7 +287,10 @@ export async function importSalesNav(opts: {
           if (found) accountId = found.id
           else {
             const created = await db().account.create({
-              data: { tenantId: tid(), name: d.companyName ?? domain, domain, country: d.country },
+              data: {
+                tenantId: tid(), name: d.companyName ?? domain, domain, country: d.country,
+                industry: d.industry, employeeCount: headcount,
+              },
             })
             accountId = created.id
             result.accountsCreated++
@@ -270,7 +306,10 @@ export async function importSalesNav(opts: {
         if (found) accountId = found.id
         else {
           const created = await db().account.create({
-            data: { tenantId: tid(), name: d.companyName, country: d.country },
+            data: {
+              tenantId: tid(), name: d.companyName, country: d.country,
+              industry: d.industry, employeeCount: headcount,
+            },
           })
           accountId = created.id
           result.accountsCreated++

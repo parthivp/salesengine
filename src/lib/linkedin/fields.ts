@@ -22,6 +22,13 @@ export const SALESNAV_FIELDS = [
   { key: 'title', label: 'Title', required: false },
   { key: 'companyName', label: 'Company', required: false },
   { key: 'companyDomain', label: 'Company domain', required: false },
+  // Industry and headcount are what the LinkedIn drafts read, and without them a
+  // card is drafted from location alone. Enrichment can supply them, but an API
+  // key is a paid tier at every provider — and Sales Navigator already shows both
+  // on screen next to the company name. Accepting them as columns means a list
+  // typed by hand produces the same drafts an enrichment bill would.
+  { key: 'industry', label: 'Industry', required: false },
+  { key: 'employeeCount', label: 'Headcount', required: false },
   { key: 'email', label: 'Email (optional)', required: false },
   { key: 'city', label: 'Location', required: false },
   { key: 'country', label: 'Country', required: false },
@@ -46,6 +53,10 @@ export const SALESNAV_ALIASES: Record<string, SalesNavField> = {
   organization: 'companyName', account: 'companyName',
   website: 'companyDomain', 'company website': 'companyDomain', domain: 'companyDomain',
   'company domain': 'companyDomain',
+  industry: 'industry', 'company industry': 'industry', sector: 'industry',
+  headcount: 'employeeCount', 'employee count': 'employeeCount', employees: 'employeeCount',
+  'company size': 'employeeCount', 'company headcount': 'employeeCount', size: 'employeeCount',
+  '# employees': 'employeeCount', 'no. of employees': 'employeeCount',
   email: 'email', 'email address': 'email', 'work email': 'email',
   location: 'city', geography: 'city', city: 'city', country: 'country',
 }

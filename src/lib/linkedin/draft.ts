@@ -71,7 +71,13 @@ export type Hook = {
  * list hands a RevOps leader a pipeline-coverage opener — technically a match, and
  * exactly the kind of near-miss that tells the recipient this was automated.
  */
-const FUNCTION_HOOKS: { pattern: RegExp; topic: string; question: string }[] = [
+const FUNCTION_HOOKS: {
+  pattern: RegExp
+  topic: string
+  question: string
+  /** Defaults to 6. Seniority-only hooks sit lower — see the block below. */
+  strength?: number
+}[] = [
   {
     pattern: /\b(revenue operations|rev ?ops|sales ops|sales operations|gtm ops)/i,
     topic: 'the handoffs between systems',
@@ -112,6 +118,45 @@ const FUNCTION_HOOKS: { pattern: RegExp; topic: string; question: string }[] = [
     topic: 'onboarding load',
     question: 'onboarding load as the team scales',
   },
+
+  // --- seniority, not function ---------------------------------------------
+  //
+  // Everything above describes what someone *does*. These describe where they
+  // sit, which is weaker — so they come last, and carry a lower strength.
+  //
+  // They exist because the functional list had nothing at all for a founder, a
+  // partner or a CEO, and those are not edge cases: "Partner" is the dominant
+  // title at a law firm and "Founder" at anything early. A queue full of them
+  // fell through to the city hook and drafted from geography alone. Being unable
+  // to say anything to the most common titles in a book is not a safe default —
+  // it is the same hollow note, just arrived at honestly.
+  {
+    // Legal first: a general counsel is a lawyer before they are an executive.
+    pattern: /\b(general counsel|legal counsel|attorney|solicitor|barrister|paralegal|litigation|\blegal\b)/i,
+    topic: 'how matters get handed between people',
+    question: 'where matters lose time being handed between people',
+    strength: 5,
+  },
+  {
+    // "Partner" only when it is seniority. A partner *manager* or *partnerships*
+    // lead is a business-development role and has nothing to do with equity.
+    pattern: /\b(managing partner|senior partner|equity partner|founding partner|partner|principal)\b(?!\s*(manager|managers|management|ships?|program))/i,
+    topic: 'where new work comes from when nobody hands it to you',
+    question: 'how much of the work you still originate yourself',
+    strength: 5,
+  },
+  {
+    pattern: /\b(founder|co-?founder|owner|proprietor)\b/i,
+    topic: 'what founders are still doing themselves',
+    question: 'what you are still doing yourself that you would rather not be',
+    strength: 5,
+  },
+  {
+    pattern: /\b(chief executive|ceo|managing director|president|general manager|\bgm\b)\b/i,
+    topic: 'where the next hire has to land',
+    question: 'where the next hire has to land',
+    strength: 5,
+  },
 ]
 
 /**
@@ -128,7 +173,9 @@ export function groundedHooks(ctx: DraftContext): Hook[] {
   }
 
   const fn = FUNCTION_HOOKS.find((f) => f.pattern.test(ctx.title ?? ''))
-  if (fn) hooks.push({ key: 'function', text: fn.question, topic: fn.topic, strength: 6 })
+  if (fn) {
+    hooks.push({ key: 'function', text: fn.question, topic: fn.topic, strength: fn.strength ?? 6 })
+  }
 
   if (ctx.employeeCount != null) {
     if (ctx.employeeCount >= 1000) {

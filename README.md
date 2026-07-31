@@ -242,6 +242,24 @@ automated.
 | `node scripts/init-env.mjs` | Create `.env` and generate the required secrets |
 | `node scripts/smoke.mjs` | Walk every route as each role; fails on any error or wrong authorization |
 
+## How it actually gets used
+
+Open **[docs/workflow.html](docs/workflow.html)** in a browser: one prospect's journey through
+the whole system, which parts run by themselves and which are yours, and where the boundaries
+are. The short version:
+
+1. **You** search Sales Navigator and type the list into a CSV — there is no export, on any plan
+2. **The app** imports it, groups people into accounts, and scores them
+3. **The app** drafts a LinkedIn note from facts on the record; **you** press send, in your own
+   browser. This step never automates. That is what keeps your account alive.
+4. **The app** runs email sequences from your own mailbox, inside your hours, under a cap
+5. **The app** polls for replies and stops the sequence the moment someone answers
+6. **You** work the deal
+
+Stages 4 and 5 need an email address, which Sales Navigator does not give you. Without one you
+have a LinkedIn-only motion, which is a complete workflow on its own — everything except the
+sequencing.
+
 ## Deploying
 
 Step-by-step, local first then online: **[DEPLOYMENT.md](DEPLOYMENT.md)**.

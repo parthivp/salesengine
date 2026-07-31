@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SalesEngine — how it works</title>
+<style>
+  :root{
+    --ink-900:#12161c; --ink-700:#3b444f; --ink-500:#6b7480; --ink-400:#8a929c;
+    --ink-200:#dfe3e8; --ink-100:#eef1f4; --surface:#ffffff; --page:#f6f8fa;
+    --brand:#2f6df6; --brand-soft:#eaf1fe;
+    --li:#0a66c2; --li-soft:#e7f0f9;
+    --mail:#7a4bd0; --mail-soft:#f1ebfb;
+    --good:#0e8a5f; --good-soft:#e6f5ef;
+    --warn:#9a6206; --warn-soft:#fdf2e0;
+    --dashed:#b9c0c9;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --ink-900:#eef1f4; --ink-700:#c3cad2; --ink-500:#98a1ab; --ink-400:#7d8691;
+      --ink-200:#333b45; --ink-100:#242b33; --surface:#181d23; --page:#0f1317;
+      --brand:#7aa3ff; --brand-soft:#1b2740;
+      --li:#5aa2e8; --li-soft:#132436;
+      --mail:#b393ee; --mail-soft:#241a38;
+      --good:#4fc596; --good-soft:#0f2a21;
+      --warn:#e0a955; --warn-soft:#302410;
+      --dashed:#4a535e;
+    }
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:var(--page); color:var(--ink-900);
+    font:15px/1.55 ui-sans-serif,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:1120px;margin:0 auto;padding:32px 24px 64px}
+  h1{font-size:24px;margin:0 0 4px;letter-spacing:-.01em}
+  .sub{color:var(--ink-500);margin:0 0 28px;font-size:14px}
+  h2{font-size:13px;text-transform:uppercase;letter-spacing:.07em;color:var(--ink-400);margin:36px 0 14px;font-weight:600}
+
+  /* ---- flow ---- */
+  .flow{display:flex;flex-direction:column;gap:0}
+  .stage{
+    display:grid;grid-template-columns:34px 1fr;gap:16px;
+  }
+  .rail{position:relative;display:flex;flex-direction:column;align-items:center}
+  .dot{
+    width:30px;height:30px;border-radius:50%;flex:none;
+    display:grid;place-items:center;font-size:13px;font-weight:650;
+    background:var(--brand-soft);color:var(--brand);border:1.5px solid currentColor;
+  }
+  .line{flex:1;width:2px;background:var(--ink-200);min-height:14px}
+  .stage:last-child .line{background:transparent}
+  .card{
+    background:var(--surface);border:1px solid var(--ink-200);border-radius:12px;
+    padding:14px 16px;margin-bottom:14px;
+  }
+  .card h3{margin:0 0 2px;font-size:15px;letter-spacing:-.005em}
+  .who{font-size:12px;color:var(--ink-400);margin:0 0 8px}
+  .card p{margin:0;color:var(--ink-700);font-size:14px}
+  .card p + p{margin-top:8px}
+
+  .tag{
+    display:inline-flex;align-items:center;gap:5px;
+    font-size:11px;font-weight:600;padding:2px 8px;border-radius:999px;
+    vertical-align:2px;margin-left:8px;white-space:nowrap;
+  }
+  .t-you{background:var(--warn-soft);color:var(--warn)}
+  .t-app{background:var(--good-soft);color:var(--good)}
+  .t-li{background:var(--li-soft);color:var(--li)}
+  .t-mail{background:var(--mail-soft);color:var(--mail)}
+
+  .out{
+    margin-top:10px;padding:10px 12px;border-radius:9px;
+    background:var(--ink-100);font-size:13px;color:var(--ink-700);
+  }
+  .out b{color:var(--ink-900);font-weight:600}
+
+  /* ---- two-column notes ---- */
+  .cols{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  @media (max-width:760px){.cols{grid-template-columns:1fr}.stage{grid-template-columns:26px 1fr;gap:12px}}
+  .note{background:var(--surface);border:1px solid var(--ink-200);border-radius:12px;padding:16px}
+  .note h3{margin:0 0 8px;font-size:14px}
+  .note p{margin:0 0 10px;color:var(--ink-700);font-size:13.5px}
+  .note p:last-child{margin-bottom:0}
+  .verdict{
+    display:inline-block;font-size:11px;font-weight:700;letter-spacing:.04em;
+    text-transform:uppercase;padding:3px 9px;border-radius:6px;margin-bottom:10px;
+  }
+  .v-no{background:var(--warn-soft);color:var(--warn)}
+  .v-later{background:var(--ink-100);color:var(--ink-500)}
+
+  table{border-collapse:collapse;width:100%;font-size:13.5px;margin-top:2px}
+  th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--ink-200);vertical-align:top}
+  th{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--ink-400);font-weight:600}
+  td:first-child{color:var(--ink-900);font-weight:550;white-space:nowrap}
+  .no{color:var(--ink-400)}
+
+  .legend{display:flex;gap:14px;flex-wrap:wrap;margin:0 0 18px;font-size:12px;color:var(--ink-500)}
+  .legend span{display:inline-flex;align-items:center;gap:6px}
+  .swatch{width:9px;height:9px;border-radius:3px;display:inline-block}
+  footer{margin-top:36px;font-size:12px;color:var(--ink-400);border-top:1px solid var(--ink-200);padding-top:14px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>SalesEngine — what it does, end to end</h1>
+  <p class="sub">One prospect's journey through the system. Who does each part, and what it leaves behind.</p>
+
+  <div class="legend">
+    <span><i class="swatch" style="background:var(--warn)"></i> you, by hand</span>
+    <span><i class="swatch" style="background:var(--good)"></i> the app, on its own</span>
+    <span><i class="swatch" style="background:var(--li)"></i> LinkedIn</span>
+    <span><i class="swatch" style="background:var(--mail)"></i> email</span>
+  </div>
+
+  <div class="flow">
+
+    <div class="stage">
+      <div class="rail"><div class="dot">1</div><div class="line"></div></div>
+      <div class="card">
+        <h3>Find them<span class="tag t-you">you</span><span class="tag t-li">Sales Navigator</span></h3>
+        <p class="who">Sales Navigator search → a lead list</p>
+        <p>You do the searching, because this is the part that needs judgement about who is
+          actually worth talking to. Sales Navigator has no export, so the list moves into a
+          spreadsheet by hand: profile URL, name, title, company — plus <b>industry</b> and
+          <b>headcount</b>, which are on the same screen and are what the drafts later read.</p>
+        <div class="out">Leaves: <b>a CSV</b></div>
+      </div>
+    </div>
+
+    <div class="stage">
+      <div class="rail"><div class="dot">2</div><div class="line"></div></div>
+      <div class="card">
+        <h3>Import<span class="tag t-app">app</span></h3>
+        <p class="who">LinkedIn queue → Import a lead list</p>
+        <p>Keyed on profile URL, so re-importing the same list updates rather than duplicates.
+          People at one company are grouped into one <b>Account</b>. Each person is scored on
+          seniority, function and company fit.</p>
+        <div class="out">Leaves: <b>Contacts + Accounts</b>, scored, in your database</div>
+      </div>
+    </div>
+
+    <div class="stage">
+      <div class="rail"><div class="dot">3</div><div class="line"></div></div>
+      <div class="card">
+        <h3>Open the relationship<span class="tag t-you">you send</span><span class="tag t-li">LinkedIn</span></h3>
+        <p class="who">LinkedIn queue → Build target list → work the cards</p>
+        <p>The app picks the highest-scoring people, drafts a connection note from facts on the
+          record, and checks it against LinkedIn's length limit. You press <b>Copy &amp; open
+          profile</b>, paste, send — in your own browser, in your own session. The app never
+          touches LinkedIn, which is why your account is not at risk. You click <b>I sent it</b>
+          and that goes on the timeline as your word, not an observation.</p>
+        <p>Capped at 20 connection requests a day. Not evasion — that's roughly where acceptance
+          rates fall and people start reporting you.</p>
+        <div class="out">Leaves: <b>an activity timeline</b>, and eventually a connection</div>
+      </div>
+    </div>
+
+    <div class="stage">
+      <div class="rail"><div class="dot">4</div><div class="line"></div></div>
+      <div class="card">
+        <h3>Follow up by email<span class="tag t-app">app sends</span><span class="tag t-mail">Microsoft 365</span></h3>
+        <p class="who">Sequences → enrol the contact</p>
+        <p>This is the part that actually runs unattended. A sequence is a series of emails with
+          waits between them. The worker sends them inside your business hours, respects a daily
+          per-mailbox cap, and appends an unsubscribe footer. <b>Needs an email address</b> —
+          see the note below.</p>
+        <div class="out">Leaves: <b>sent mail</b>, opens and clicks, an outbox record per send</div>
+      </div>
+    </div>
+
+    <div class="stage">
+      <div class="rail"><div class="dot">5</div><div class="line"></div></div>
+      <div class="card">
+        <h3>Catch the reply<span class="tag t-app">app</span><span class="tag t-mail">Graph API</span></h3>
+        <p class="who">Inbox</p>
+        <p>The worker polls your mailbox through Microsoft Graph, matches each reply to a contact,
+          and classifies it: interested, not interested, out of office, bounce, unsubscribe.
+          <b>An interested reply stops the sequence immediately</b> — the single most important
+          thing here, because nothing damages a relationship faster than a fifth automated email
+          after someone has already answered.</p>
+        <p>Out-of-office holds the sequence until they're back. A bounce marks the address dead.
+          An opt-out is honoured permanently.</p>
+        <div class="out">Leaves: <b>a reply in your Inbox</b>, sequence stopped, contact re-scored</div>
+      </div>
+    </div>
+
+    <div class="stage">
+      <div class="rail"><div class="dot">6</div><div class="line"></div></div>
+      <div class="card">
+        <h3>Work the deal<span class="tag t-you">you</span></h3>
+        <p class="who">Deals → pipeline stages · Tasks · Reports</p>
+        <p>Once someone is talking to you, they become a <b>Deal</b> on a pipeline with stages you
+          control. Tasks are your follow-ups. Reports tell you which step of which sequence
+          actually produced the conversations — which is how you decide what to change.</p>
+        <div class="out">Leaves: <b>a pipeline you can forecast from</b></div>
+      </div>
+    </div>
+
+  </div>
+
+  <h2>Two questions you asked</h2>
+  <div class="cols">
+
+    <div class="note">
+      <span class="verdict v-no">skip it for now</span>
+      <h3>Where does Apollo fit?</h3>
+      <p>Nowhere, in the flow above — and that's deliberate. Sales Navigator already gives you
+        name, title, company, industry and headcount. Apollo would only add one thing you can't
+        get yourself: <b>the work email address</b>.</p>
+      <p>That matters, because <b>stage 4 cannot run without one</b>. With Sales Navigator alone
+        you have a LinkedIn-only motion — stages 1–3 and 6, no email sequencing.</p>
+      <p>If you decide you want email, the cheap route is Apollo's <b>$49 UI plan and its CSV
+        export</b>, not the API — API access starts around $79–119/seat. Export from Apollo,
+        import here, done. Same importer, no key, no code. Check the export credit limit on
+        Basic before you commit.</p>
+    </div>
+
+    <div class="note">
+      <span class="verdict v-later">not yet</span>
+      <h3>Why is there a CRM connector?</h3>
+      <p>For your own use, there's nothing in it. <b>SalesEngine is your CRM</b> — Contacts,
+        Accounts, Deals, pipeline, activity history all live here.</p>
+      <p>The Salesforce connector exists for the version of this you sell to someone else. A
+        company that already runs on Salesforce won't move off it; they want this as the
+        outbound engine bolted onto the system of record they already have. The sync handles
+        the hard parts of that — echo suppression, conflict policy, watermarks.</p>
+      <p>Leave it disconnected. Nothing degrades.</p>
+    </div>
+
+  </div>
+
+  <h2>What runs by itself, and what doesn't</h2>
+  <table>
+    <thead><tr><th>Step</th><th>Who does it</th><th>Why</th></tr></thead>
+    <tbody>
+      <tr><td>Sourcing leads</td><td>You</td><td>Needs judgement, and no export exists</td></tr>
+      <tr><td>Scoring &amp; grouping</td><td>App</td><td>Mechanical</td></tr>
+      <tr><td>Drafting LinkedIn notes</td><td>App</td><td>From facts on the record only</td></tr>
+      <tr><td><b>Sending</b> LinkedIn notes</td><td>You</td><td>Automating it risks your account. Non-negotiable.</td></tr>
+      <tr><td>Sending email</td><td>App</td><td>Your own mailbox, your own domain, capped</td></tr>
+      <tr><td>Reading replies</td><td>App</td><td>Stops sequences before you annoy someone</td></tr>
+      <tr><td>Deciding what a reply means</td><td>You</td><td>The app classifies; you judge</td></tr>
+      <tr><td>Moving the deal</td><td>You</td><td>It's a sales job, not a data job</td></tr>
+    </tbody>
+  </table>
+
+  <footer>
+    The one hard rule: nothing in this system touches linkedin.com on your behalf. No headless
+    browser, no proxies, no fingerprint rotation, no scraping. Every LinkedIn action is a human
+    pressing send in their own logged-in session.
+  </footer>
+
+</div>
+</body>
+</html>

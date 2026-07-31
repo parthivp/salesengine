@@ -1,5 +1,5 @@
 import 'server-only'
-import bcrypt from 'bcryptjs'
+import { hashPassword, verifyPassword, validatePassword } from './password'
 import { cookies, headers } from 'next/headers'
 import { cache } from 'react'
 import type { User, Tenant, UserRole } from '@prisma/client'
@@ -24,23 +24,10 @@ export type AuthContext = {
 
 // --- passwords -------------------------------------------------------------
 
-export async function hashPassword(password: string): Promise<string> {
-  return bcrypt.hash(password, 12)
-}
-
-export async function verifyPassword(password: string, hash: string): Promise<boolean> {
-  return bcrypt.compare(password, hash)
-}
-
-/** Deliberately modest: length beats character-class theatre. */
-export function validatePassword(password: string): string | null {
-  if (password.length < 10) return 'Password must be at least 10 characters.'
-  if (password.length > 200) return 'Password must be under 200 characters.'
-  if (/^\d+$/.test(password)) return 'Password cannot be only digits.'
-  return null
-}
-
-// --- sessions --------------------------------------------------------------
+// Re-exported so existing imports from '@/lib/auth' keep working. The
+// implementations live in './password', which does not import `server-only` and
+// can therefore be used by the CLI scripts that create accounts.
+export { hashPassword, verifyPassword, validatePassword }
 
 export async function createSession(userId: string, meta: { ip?: string; userAgent?: string } = {}) {
   const token = generateToken()

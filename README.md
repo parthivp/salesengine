@@ -238,9 +238,12 @@ automated.
 | `npm run lint` | ESLint (flat config) |
 | `npm run db:provision` | Role password, grants, and the row-level-security audit |
 | `npm run check` | Readiness report; exits non-zero on a blocker |
+| `npm run tenant:create` | Create a real workspace and its first owner |
 | `node scripts/smoke.mjs` | Walk every route as each role; fails on any error or wrong authorization |
 
 ## Deploying
+
+Step-by-step, local first then online: **[DEPLOYMENT.md](DEPLOYMENT.md)**.
 
 ```bash
 cp .env.example .env      # fill in AUTH_SECRET, ENCRYPTION_KEY, APP_DB_PASSWORD

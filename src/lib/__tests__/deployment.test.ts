@@ -49,6 +49,19 @@ describe('the runtime database role', () => {
     expect(url).not.toMatch(/\/\/salesengine:/)
   })
 
+  it.each(['app', 'worker'])('%s also gets a working owner connection', (service) => {
+    // `prismaAdmin` uses DIRECT_DATABASE_URL at *runtime*, not only for
+    // migrations: sessions carry no tenantId so no policy applies to them, and
+    // the tracking, capture and scheduler paths are cross-tenant by nature.
+    // Without this set, the container inherits `localhost` from .env, and the
+    // first symptom is that nobody can log in — the app starts fine and serves
+    // the login page before failing.
+    const url = envFor(service).DIRECT_DATABASE_URL
+    expect(url, `${service} has no DIRECT_DATABASE_URL`).toBeTruthy()
+    expect(url).toContain('@postgres:')
+    expect(url).not.toContain('localhost')
+  })
+
   it('the migrate step uses the owner, because it administers roles and schema', () => {
     const env = envFor('migrate')
     expect(env.DATABASE_URL).toMatch(/\/\/salesengine:/)

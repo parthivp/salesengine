@@ -69,6 +69,12 @@ services:
       # the owner, so running the app as the owner turns tenant isolation off
       # entirely — with every application-level check still looking correct.
       DATABASE_URL: postgresql://salesengine_app:${APP_DB_PASSWORD:?set APP_DB_PASSWORD in .env}@postgres:5432/salesengine?schema=public
+      # The app also needs the owner connection. `prismaAdmin` uses it for the
+      # paths that are legitimately cross-tenant or un-scoped: sessions (no
+      # tenantId, so no policy applies), the tracking and capture endpoints
+      # (which run before any tenant context exists), and the platform view.
+      # Without this it inherits localhost from .env and nobody can even log in.
+      DIRECT_DATABASE_URL: postgresql://salesengine:${POSTGRES_PASSWORD:-salesengine}@postgres:5432/salesengine?schema=public
       REDIS_URL: redis://redis:6379
       PORT: '3000'
     ports:
@@ -93,6 +99,9 @@ services:
       NODE_ENV: production
       # Restricted role here too — the worker touches the same tenant data.
       DATABASE_URL: postgresql://salesengine_app:${APP_DB_PASSWORD:?set APP_DB_PASSWORD in .env}@postgres:5432/salesengine?schema=public
+      # The scheduler is cross-tenant by nature — it finds every due enrollment
+      # and every mailbox to poll, across all workspaces.
+      DIRECT_DATABASE_URL: postgresql://salesengine:${POSTGRES_PASSWORD:-salesengine}@postgres:5432/salesengine?schema=public
       REDIS_URL: redis://redis:6379
     depends_on:
       migrate:

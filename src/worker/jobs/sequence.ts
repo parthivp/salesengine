@@ -1,6 +1,7 @@
 import { withTenant, db, tid, prismaAdmin } from '../../lib/db'
 import { logger } from '../../lib/logger'
 import { enqueue } from '../../lib/queue'
+import type { StepCondition } from '../../lib/sequences/conditions'
 import { domainFromEmail } from '../../lib/utils'
 import { render, valuesFor } from '../../lib/email/merge'
 import {
@@ -45,6 +46,17 @@ type PreparedSend = {
   stepId: string
 }
 
+/**
+ * How long the engine waits for a human to action a card before giving up on the
+ * step and moving on.
+ *
+ * Two weeks: long enough to cover a holiday, short enough that a campaign someone
+ * abandoned does not sit "in progress" for a quarter. Timing out advances rather
+ * than stops, because the person is still a live prospect — it is the *step* that
+ * was skipped, not the relationship.
+ */
+const HUMAN_STEP_PATIENCE_MS = 14 * 86_400_000
+
 type PreparedOutcome =
   | PreparedSend
   | { kind: 'skip'; reason: string }
@@ -52,6 +64,8 @@ type PreparedOutcome =
   | { kind: 'defer'; until: Date; reason: string }
   | { kind: 'advanced' }
   | { kind: 'completed' }
+  /** Parked on a card a human has to action before the campaign continues. */
+  | { kind: 'waiting' }
 
 export async function processEnrollmentStep({
   enrollmentId,
@@ -191,32 +205,19 @@ async function claimAndPrepare(
 
   const { contact, sequence } = enrollment
 
-  // --- hard stops ---------------------------------------------------------
+  // --- hard stops, whatever the channel ------------------------------------
+  //
+  // Only the ones that mean "do not contact this person at all". The email-shaped
+  // checks moved down to the email branch: they used to run here, and
+  // `!contact.email` failed the enrollment outright — which made a LinkedIn-only
+  // campaign impossible, since a Sales Navigator list has no email addresses by
+  // definition. The campaign died on its first tick with "Contact has no email
+  // address" against someone we never intended to email.
   if (contact.unsubscribedAt) {
     return stop(enrollmentId, 'stopped_unsubscribed', 'Contact unsubscribed')
   }
-  if (contact.bouncedAt) {
-    return stop(enrollmentId, 'stopped_bounced', 'Previous email bounced')
-  }
-  if (!contact.email) {
-    return stop(enrollmentId, 'failed', 'Contact has no email address')
-  }
   if (contact.status === 'do_not_contact') {
     return stop(enrollmentId, 'stopped_manual', 'Contact marked do-not-contact')
-  }
-
-  const domain = domainFromEmail(contact.email)
-  const suppressed = await db().suppressionEntry.findFirst({
-    where: {
-      OR: [
-        { type: 'email', value: contact.email },
-        ...(domain ? [{ type: 'domain' as const, value: domain }] : []),
-      ],
-    },
-    select: { reason: true },
-  })
-  if (suppressed) {
-    return stop(enrollmentId, 'stopped_unsubscribed', `Suppressed (${suppressed.reason})`)
   }
 
   if (sequence.stopOnReply && contact.lastRepliedAt) {
@@ -272,6 +273,11 @@ async function claimAndPrepare(
   }
 
   if (step.type === 'task' || step.type === 'call' || step.type.startsWith('linkedin')) {
+    const who =
+      [contact.firstName, contact.lastName].filter(Boolean).join(' ') ||
+      contact.email ||
+      'this contact'
+
     await db().task.create({
       data: {
         tenantId: tid(),
@@ -279,12 +285,16 @@ async function claimAndPrepare(
           step.type === 'call' ? 'call'
           : step.type.startsWith('linkedin') ? 'linkedin'
           : 'follow_up',
-        title: step.taskNote?.slice(0, 200) ?? `${step.type.replace(/_/g, ' ')} — ${contact.email}`,
+        // Falling back to the email address produced "linkedin connect — null" on
+        // every LinkedIn-only contact, which is most of them: these lists have no
+        // email, which is the entire reason the LinkedIn path exists.
+        title: step.taskNote?.slice(0, 200) ?? `${step.type.replace(/_/g, ' ')} — ${who}`,
         note: step.taskNote,
         contactId: contact.id,
         accountId: contact.accountId,
         assigneeId: contact.ownerId,
         dueAt: new Date(),
+        enrollmentId,
         // The drafted message the rep will send themselves. This is the
         // human-in-the-loop LinkedIn path — we never touch LinkedIn ourselves.
         payload: step.type.startsWith('linkedin')
@@ -296,13 +306,62 @@ async function claimAndPrepare(
           : {},
       },
     })
-    await advance(enrollmentId, window)
-    return { kind: 'advanced' }
+
+    // Stop here. The step is not done until a human does it.
+    //
+    // This used to advance immediately, which meant a campaign of
+    // "connect → wait 2 days → message" queued the message card whether or not
+    // the connection request was ever sent, and whether or not it was accepted.
+    // The campaign looked like it was running while describing something that had
+    // not happened — worse than not running at all, because the numbers lied.
+    //
+    // `waitingUntil` is the escape hatch: an enrollment blocked on a card nobody
+    // ever actions would otherwise sit there forever, and a stalled campaign that
+    // still reads as active is exactly the invisible failure this engine keeps
+    // trying to avoid.
+    await db().sequenceEnrollment.update({
+      where: { id: enrollmentId },
+      data: {
+        status: 'waiting_on_human',
+        nextRunAt: null,
+        waitingUntil: new Date(Date.now() + HUMAN_STEP_PATIENCE_MS),
+      },
+    })
+    return { kind: 'waiting' }
   }
 
   if (step.type !== 'email') {
     await advance(enrollmentId, window)
     return { kind: 'advanced' }
+  }
+
+  // --- email-only preconditions -------------------------------------------
+  //
+  // A bounced address, a missing address and a suppression entry are all facts
+  // about *email*. None of them says anything about whether this person can be
+  // approached on LinkedIn, so they gate the email step rather than the
+  // enrollment. A mixed campaign skips the email and carries on.
+  if (!contact.email) {
+    log.info({ contactId: contact.id }, 'skipping email step: contact has no email address')
+    await advance(enrollmentId, window)
+    return { kind: 'advanced' }
+  }
+  if (contact.bouncedAt) {
+    return stop(enrollmentId, 'stopped_bounced', 'Previous email bounced')
+  }
+
+  const domain = domainFromEmail(contact.email)
+  const suppressed = await db().suppressionEntry.findFirst({
+    where: {
+      OR: [
+        { type: 'email', value: contact.email },
+        ...(domain ? [{ type: 'domain' as const, value: domain }] : []),
+      ],
+    },
+    select: { reason: true },
+  })
+  if (suppressed) {
+    return stop(enrollmentId, 'stopped_unsubscribed', `Suppressed (${suppressed.reason})`)
   }
 
   // --- mailbox capacity ---------------------------------------------------
@@ -487,7 +546,10 @@ function selectStep(
 }
 
 type Condition = {
-  type?: 'always' | 'if_opened' | 'if_not_opened' | 'if_clicked' | 'if_not_clicked' | 'if_no_reply'
+  // The vocabulary lives in lib/sequences/conditions.ts so the UI's label map can
+  // be typed against it — a condition with no label used to render as no branch
+  // at all, which makes a conditional campaign look unconditional.
+  type?: StepCondition
   withinDays?: number
 }
 
@@ -532,9 +594,101 @@ async function evaluateConditions(
       })
       return n === 0 ? { pass: true } : { pass: false, reason: 'replied' }
     }
+    case 'if_connected': {
+      const c = await db().contact.findUnique({
+        where: { id: contactId },
+        select: { linkedinConnectedAt: true },
+      })
+      const at = c?.linkedinConnectedAt
+      if (!at) return { pass: false, reason: 'not_connected' }
+      // `withinDays` here means "accepted recently", which is how you build
+      // "message them while it is still warm" without messaging someone who
+      // accepted eight months ago and has forgotten who you are.
+      if (since && at < since) return { pass: false, reason: 'connected_too_long_ago' }
+      return { pass: true }
+    }
+    case 'if_not_connected': {
+      const c = await db().contact.findUnique({
+        where: { id: contactId },
+        select: { linkedinConnectedAt: true },
+      })
+      // Deliberately *not* "declined". LinkedIn never reports a decline, so this
+      // means "no acceptance seen yet" and nothing more.
+      return c?.linkedinConnectedAt ? { pass: false, reason: 'connected' } : { pass: true }
+    }
     default:
       return { pass: true }
   }
+}
+
+/**
+ * Releases an enrollment parked on a human step, once the human has done it.
+ *
+ * Called from the LinkedIn queue when a card is actioned. Deliberately tolerant:
+ * a card with no enrollment (built ad hoc from "build target list" rather than by
+ * a campaign) is the common case and is not an error.
+ *
+ * Must be called inside a tenant context.
+ */
+export async function releaseHumanStep(
+  enrollmentId: string,
+  outcome: 'done' | 'abandoned'
+): Promise<{ released: boolean }> {
+  const enrollment = await db().sequenceEnrollment.findUnique({
+    where: { id: enrollmentId },
+    select: { id: true, status: true },
+  })
+  if (!enrollment || enrollment.status !== 'waiting_on_human') return { released: false }
+
+  await db().sequenceEnrollment.update({
+    where: { id: enrollment.id },
+    data: { status: 'active', waitingUntil: null },
+  })
+
+  if (outcome === 'abandoned') {
+    // "Not a fit" and "already connected" end the campaign for this person rather
+    // than marching them through the remaining steps. Continuing would be the
+    // engine overruling a judgement the operator just made by hand.
+    await db().sequenceEnrollment.update({
+      where: { id: enrollment.id },
+      data: {
+        status: 'stopped_manual',
+        stoppedAt: new Date(),
+        stopReason: 'Card resolved without sending',
+        nextRunAt: null,
+      },
+    })
+    return { released: true }
+  }
+
+  await advance(enrollment.id)
+  return { released: true }
+}
+
+/**
+ * Moves on from steps nobody ever actioned.
+ *
+ * Run from the tick. Without it a campaign parks on a card the operator ignored
+ * and stays "in progress" indefinitely — alive on the dashboard, doing nothing.
+ */
+export async function timeOutAbandonedSteps(): Promise<{ timedOut: number }> {
+  const stale = await db().sequenceEnrollment.findMany({
+    where: { status: 'waiting_on_human', waitingUntil: { lt: new Date() } },
+    select: { id: true },
+    take: 500,
+  })
+
+  for (const e of stale) {
+    await db().sequenceEnrollment.update({
+      where: { id: e.id },
+      data: { status: 'active', waitingUntil: null },
+    })
+    // Advance rather than stop: the step was skipped, the prospect is still live.
+    await advance(e.id)
+  }
+
+  if (stale.length) logger.info({ timedOut: stale.length }, 'human steps timed out')
+  return { timedOut: stale.length }
 }
 
 async function advance(
@@ -759,6 +913,18 @@ export async function recordReply({
 
 /** Fans out due enrollments. Kept here so the tick and the machine live together. */
 export async function sequenceTick() {
+  // Sweep abandoned human steps first, so anything that timed out this minute is
+  // active again and picked up by the same pass rather than the next one.
+  const stalled = await prismaAdmin.sequenceEnrollment.findMany({
+    where: { status: 'waiting_on_human', waitingUntil: { lt: new Date() } },
+    select: { tenantId: true },
+    distinct: ['tenantId'],
+    take: 200,
+  })
+  for (const { tenantId } of stalled) {
+    await withTenant(tenantId, () => timeOutAbandonedSteps())
+  }
+
   const due = await prismaAdmin.sequenceEnrollment.findMany({
     where: {
       status: 'active',

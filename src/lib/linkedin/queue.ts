@@ -2,6 +2,7 @@ import { db, tid } from '../db'
 import { draftMessage, checkDraft, type DraftContext, type Draft, type DraftCheck } from './draft'
 import { SENIOR_TITLE } from '../titles'
 import { assessPacing, type LinkedInActionType, ACTION_LABEL } from './policy'
+import { releaseHumanStep } from '../../worker/jobs/sequence'
 import type { Task } from '@prisma/client'
 
 /**
@@ -272,6 +273,15 @@ export async function recordAction(opts: {
       })
     }
 
+    // Let the campaign move on. Until this existed the engine advanced the moment
+    // it created the card, so a campaign ran ahead of the person working it.
+    if (task.enrollmentId) {
+      await releaseHumanStep(
+        task.enrollmentId,
+        outcome === 'not_a_fit' || outcome === 'already_connected' ? 'abandoned' : 'done'
+      )
+    }
+
     // Marking a card "already connected" is a statement that the connection
     // exists, which is the same fact the notification email carries. Recording it
     // here means the acceptance report is not skewed by everyone the rep knew
@@ -285,7 +295,12 @@ export async function recordAction(opts: {
 
     // A sent connection request earns a follow-up: the value is in the message
     // after acceptance, and that is the step teams forget.
-    if (outcome === 'sent' && action === 'connect') {
+    //
+    // Unless a campaign is already handling it. A card that belongs to an
+    // enrollment has its follow-up defined as the next step, and creating this one
+    // too puts two cards for the same person in front of the rep — who then either
+    // messages them twice or works out which to ignore.
+    if (outcome === 'sent' && action === 'connect' && !task.enrollmentId) {
       // Stamped so "invited but never accepted" is answerable. Without this the
       // app knows a card was actioned but not that an invitation is outstanding,
       // and outstanding-for-three-weeks is the thing worth seeing.

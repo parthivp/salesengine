@@ -3,6 +3,8 @@ import { notFound } from 'next/navigation'
 import { requirePermission } from '@/lib/auth'
 import { withTenant, db } from '@/lib/db'
 import { PageHeader, Card, Badge, StatTile } from '@/components/ui'
+import { campaignFunnel } from '@/lib/sequences/funnel'
+import type { StepCondition } from '@/lib/sequences/conditions'
 import { formatNumber, formatRelative } from '@/lib/utils'
 import { lintContent } from '@/lib/email/deliverability'
 import { unknownTags } from '@/lib/email/merge'
@@ -22,12 +24,21 @@ const STEP_ICON: Record<string, React.ComponentType<{ className?: string }>> = {
   condition: GitBranch,
 }
 
-const CONDITION_LABEL: Record<string, string> = {
+/**
+ * Typed against the engine's own condition union, so adding a condition without a
+ * label here is a compile error rather than a step whose branch renders as nothing.
+ * That is exactly what happened when `if_connected` was added: the row fell through
+ * `CONDITION_LABEL[cond] && ...` and the campaign silently displayed as unbranched.
+ */
+const CONDITION_LABEL: Record<StepCondition, string> = {
+  always: '',
   if_opened: 'only if a previous email was opened',
   if_not_opened: 'only if no previous email was opened',
   if_clicked: 'only if a link was clicked',
   if_not_clicked: 'only if no link was clicked',
   if_no_reply: 'only if they have not replied',
+  if_connected: 'only if they accepted the connection request',
+  if_not_connected: 'only if they have not accepted yet',
 }
 
 function humanDelay(minutes: number): string {
@@ -56,7 +67,8 @@ export default async function SequenceDetailPage({
     })
     if (!sequence) return null
 
-    const [byStatus, sent, opened, clicked, replied, mailboxes, recent] = await Promise.all([
+    const [funnel, byStatus, sent, opened, clicked, replied, mailboxes, recent] = await Promise.all([
+      campaignFunnel(id),
       db().sequenceEnrollment.groupBy({
         by: ['status'],
         where: { sequenceId: id },
@@ -76,11 +88,11 @@ export default async function SequenceDetailPage({
     ])
 
     const counts = Object.fromEntries(byStatus.map((g) => [g.status, g._count._all]))
-    return { sequence, counts, sent, opened, clicked, replied, mailboxes, recent }
+    return { sequence, counts, sent, opened, clicked, replied, mailboxes, recent, funnel }
   })
 
   if (!data) notFound()
-  const { sequence, counts, sent, opened, clicked, replied, mailboxes, recent } = data
+  const { sequence, counts, sent, opened, clicked, replied, mailboxes, recent, funnel } = data
 
   const totalEnrolled = Object.values(counts).reduce((a, b) => a + b, 0)
   const replyRate = sent ? (replied / sent) * 100 : 0
@@ -130,6 +142,75 @@ export default async function SequenceDetailPage({
         />
       </div>
 
+      {/* The funnel, shown whenever anyone was actually invited. "Sent" and
+          "reply rate" describe an email campaign; for a LinkedIn one no mail is
+          sent at all and both numbers read as zero, which looks like failure
+          rather than a different shape of work. */}
+      {funnel.stages[1].count > 0 && (
+        <Card className="mb-6 p-5">
+          <div className="flex items-baseline justify-between gap-4 mb-4">
+            <h2 className="text-sm font-semibold text-ink-900">Where people drop out</h2>
+            <p className="text-xs text-ink-500">
+              {funnel.medianDaysToAccept != null
+                ? `Typically ${funnel.medianDaysToAccept} days to accept`
+                : 'Not enough accepted invitations to time yet'}
+            </p>
+          </div>
+
+          <ol className="space-y-2.5">
+            {funnel.stages.map((stage) => {
+              const top = funnel.stages[0].count || 1
+              const width = Math.max(2, Math.round((stage.count / top) * 100))
+              return (
+                <li key={stage.key} className="flex items-center gap-3">
+                  <span className="w-20 shrink-0 text-xs font-medium text-ink-700">
+                    {stage.label}
+                  </span>
+                  <span className="flex-1 min-w-0">
+                    <span
+                      className="block h-5 rounded bg-brand-500/85"
+                      style={{ width: `${width}%` }}
+                      role="presentation"
+                    />
+                  </span>
+                  <span className="w-32 shrink-0 text-right text-xs tabular-nums text-ink-700">
+                    {formatNumber(stage.count)}
+                    {stage.ofPrevious != null && (
+                      <span className="text-ink-400">
+                        {' '}· {Math.round(stage.ofPrevious * 100)}%
+                      </span>
+                    )}
+                  </span>
+                </li>
+              )
+            })}
+          </ol>
+
+          <dl className="mt-4 pt-3 border-t border-ink-100 grid gap-x-6 gap-y-1 text-xs sm:grid-cols-2">
+            {funnel.stages
+              .filter((s) => s.hint)
+              .map((s) => (
+                <div key={s.key} className="flex gap-1.5">
+                  <dt className="text-ink-500 shrink-0">{s.label}:</dt>
+                  <dd className="text-ink-400">{s.hint}</dd>
+                </div>
+              ))}
+          </dl>
+
+          {funnel.waitingOnYou > 0 && (
+            <p className="mt-3 text-xs text-amber-800">
+              {formatNumber(funnel.waitingOnYou)}{' '}
+              {funnel.waitingOnYou === 1 ? 'person is' : 'people are'} parked waiting on a card in
+              your{' '}
+              <Link href="/linkedin" className="underline underline-offset-2">
+                LinkedIn queue
+              </Link>
+              . The campaign does not move until you work them.
+            </p>
+          )}
+        </Card>
+      )}
+
       <div className="grid gap-6 lg:grid-cols-3">
         <div className="lg:col-span-2 space-y-4">
           <Card>
@@ -146,7 +227,7 @@ export default async function SequenceDetailPage({
             <ol className="divide-y divide-ink-100">
               {sequence.steps.map((step, i) => {
                 const Icon = STEP_ICON[step.type] ?? Mail
-                const cond = (step.conditions as { type?: string } | null)?.type
+                const cond = (step.conditions as { type?: StepCondition } | null)?.type
                 const body = step.bodyText ?? ''
                 const subject = step.subject ?? ''
                 const lint =
@@ -194,7 +275,12 @@ export default async function SequenceDetailPage({
                             </p>
                           </>
                         ) : (
-                          <p className="mt-2 text-sm text-ink-600">{step.taskNote ?? '—'}</p>
+                          <p className="mt-2 text-sm text-ink-600 whitespace-pre-line">
+                            {/* A LinkedIn step's message lives in bodyText; taskNote is the
+                                instruction for a plain task. Reading only taskNote showed a
+                                dash under every LinkedIn step that had a perfectly good draft. */}
+                            {step.taskNote ?? body ?? '—'}
+                          </p>
                         )}
 
                         {badTags.length > 0 && (

@@ -563,6 +563,9 @@ model SequenceStep {
 
 enum EnrollmentStatus {
   active
+  /// A step created a card and is waiting for the operator to act on it. Distinct
+  /// from `paused`, which is a human deciding to hold the whole enrollment.
+  waiting_on_human
   paused
   completed
   stopped_replied
@@ -607,6 +610,12 @@ model SequenceEnrollment {
   updatedAt DateTime @updatedAt
 
   emailMessages EmailMessage[]
+  tasks         Task[]
+
+  /// When a step is waiting on a human, this is the point at which the engine
+  /// gives up waiting and moves on. An enrollment blocked forever is an invisible
+  /// failure — the campaign looks alive and nothing is happening.
+  waitingUntil DateTime?
 
   @@unique([sequenceId, contactId])
   @@index([tenantId, status, nextRunAt])
@@ -837,6 +846,12 @@ model Task {
   // LinkedIn queue payload — the drafted message the rep will send themselves.
   payload Json @default("{}")
 
+  /// Set when this task *is* a sequence step waiting on a human. Recording the
+  /// outcome is what advances the enrollment — without this link the engine has
+  /// no way to know the step was done, and campaigns run ahead of the operator.
+  enrollmentId String?
+  enrollment   SequenceEnrollment? @relation(fields: [enrollmentId], references: [id], onDelete: SetNull)
+
   dueAt       DateTime?
   snoozedTo   DateTime?
   completedAt DateTime?
@@ -849,6 +864,7 @@ model Task {
 
   @@index([tenantId, assigneeId, status, dueAt])
   @@index([tenantId, type, status])
+  @@index([enrollmentId])
   @@map("tasks")
 }
 

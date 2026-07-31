@@ -28,27 +28,36 @@ git pull
 
 ### 2. Create `.env`
 
-```powershell
-Copy-Item .env.example .env
-notepad .env
-```
-
-Three values must be filled in. Generate them in PowerShell:
+One command, and it needs nothing installed on the host but Docker:
 
 ```powershell
-# AUTH_SECRET — 64 hex characters
--join ((1..64) | ForEach-Object { '{0:x}' -f (Get-Random -Maximum 16) })
-
-# ENCRYPTION_KEY — exactly 32 characters, no more, no less
--join ((1..32) | ForEach-Object { '{0:x}' -f (Get-Random -Maximum 16) })
-
-# APP_DB_PASSWORD — 32 hex characters
--join ((1..32) | ForEach-Object { '{0:x}' -f (Get-Random -Maximum 16) })
+docker run --rm -v "${PWD}:/w" -w /w node:22-alpine node scripts/init-env.mjs
 ```
 
-**Keep `APP_DB_PASSWORD` to letters and digits.** It is substituted into a database URL,
-so a `@`, `:`, `/`, `#` or `?` in it silently produces a malformed connection string. The
-hex generator above avoids the problem entirely.
+That copies `.env.example`, generates `AUTH_SECRET`, `ENCRYPTION_KEY` and
+`APP_DB_PASSWORD` at the exact lengths the schema requires, and prints what it did.
+It is safe to re-run — it fills in blanks and never overwrites a value that is already
+set, because regenerating `AUTH_SECRET` would sign everyone out.
+
+**Copying `.env.example` by hand is not enough.** It ships those three keys as `""`,
+and Docker Compose treats an empty value exactly like a missing one:
+
+```
+error while interpolating services.migrate.environment.APP_DB_PASSWORD:
+required variable APP_DB_PASSWORD is missing a value
+```
+
+That message is byte-identical whether `.env` is absent or present-with-blanks, so it
+cannot tell you which you have. To check by hand:
+
+```powershell
+Test-Path .env
+Select-String -Path .env -Pattern '^(AUTH_SECRET|ENCRYPTION_KEY|APP_DB_PASSWORD)='
+```
+
+The secrets are hex on purpose: they are substituted into database URLs, where a `@`,
+`:`, `/`, `#` or `?` silently produces a malformed connection string rather than an
+error you can read.
 
 Leave everything else alone for now. In particular leave:
 
@@ -56,7 +65,7 @@ Leave everything else alone for now. In particular leave:
 EMAIL_TRANSPORT="log"
 ```
 
-so that nothing can send real mail while you are poking at it. `.env` is gitignored.
+so nothing can send real mail while you are poking at it. `.env` is gitignored.
 
 ### 3. Start it
 
@@ -170,7 +179,7 @@ docker compose down -v         # stop and delete the database volumes
 | Symptom | Cause |
 |---|---|
 | `migrate` exits 1 with an RLS list | A tenant table has no policy. `SELECT apply_tenant_rls();` then re-run. |
-| Compose refuses to start, mentions `APP_DB_PASSWORD` | It is unset in `.env`. That is intentional — a default would ship the placeholder password. |
+| Compose refuses to start, mentions `APP_DB_PASSWORD` | `.env` is missing, **or present with `APP_DB_PASSWORD=""`** — compose treats empty and unset identically. Run the `init-env.mjs` command in step 2. |
 | Login fails, `app` logs a connection error | `DIRECT_DATABASE_URL` is wrong. Compose sets it; if you overrode it in `.env` for host use, the container inherits `localhost` and cannot reach Postgres. |
 | Port 3000 in use | `APP_PORT=3001 docker compose up -d` |
 | Slow first build | Expected. Rebuilds are cached. |

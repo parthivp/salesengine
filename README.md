@@ -239,6 +239,7 @@ automated.
 | `npm run db:provision` | Role password, grants, and the row-level-security audit |
 | `npm run check` | Readiness report; exits non-zero on a blocker |
 | `npm run tenant:create` | Create a real workspace and its first owner |
+| `node scripts/init-env.mjs` | Create `.env` and generate the required secrets |
 | `node scripts/smoke.mjs` | Walk every route as each role; fails on any error or wrong authorization |
 
 ## Deploying

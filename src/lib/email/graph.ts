@@ -316,9 +316,43 @@ export async function fetchNewMessages(
  * different fixes: a bad secret fails at Entra, while a missing Application
  * Access Policy authenticates fine and then returns 403 on the mailbox.
  */
+/**
+ * The application permissions Entra actually granted this registration.
+ *
+ * Read from the `roles` claim of our own access token. Not verified — there is
+ * nothing to verify, it is a token we just fetched with our own secret, and the
+ * claim is only being used to tell the operator what they consented to.
+ *
+ * The alternative is finding out at the first send, three days into a campaign,
+ * when Graph returns 403 and the mail silently does not go.
+ */
+export function grantedRoles(token: string): string[] {
+  const payload = token.split('.')[1]
+  if (!payload) return []
+  try {
+    const json = Buffer.from(payload.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8')
+    const roles = (JSON.parse(json) as { roles?: unknown }).roles
+    return Array.isArray(roles) ? roles.filter((r): r is string => typeof r === 'string') : []
+  } catch {
+    // A token we cannot decode is not an error worth surfacing — the mailbox
+    // check below is the real test. Report nothing rather than claiming nothing
+    // was granted.
+    return []
+  }
+}
+
+export type GraphVerification = {
+  displayName: string
+  /** Granted application permissions, as Entra reports them. */
+  roles: string[]
+  canRead: boolean
+  /** False means sequences from this mailbox will be logged, never sent. */
+  canSend: boolean
+}
+
 export async function verifyGraphAccess(
   creds: GraphCredentials
-): Promise<{ ok: true; displayName: string } | { ok: false; error: string }> {
+): Promise<{ ok: true; result: GraphVerification } | { ok: false; error: string }> {
   let token: string
   try {
     token = await accessToken(creds)
@@ -347,7 +381,18 @@ export async function verifyGraphAccess(
   }
 
   const user = (await res.json()) as { displayName?: string }
-  return { ok: true, displayName: user.displayName ?? creds.mailbox }
+  const roles = grantedRoles(token)
+
+  return {
+    ok: true,
+    result: {
+      displayName: user.displayName ?? creds.mailbox,
+      roles,
+      // Reaching the mailbox at all proves read access, whatever the claim says.
+      canRead: true,
+      canSend: roles.some((r) => /^Mail\.(Send|ReadWrite)/i.test(r)),
+    },
+  }
 }
 
 // ---------------------------------------------------------------------------

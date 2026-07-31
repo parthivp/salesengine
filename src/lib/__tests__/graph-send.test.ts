@@ -187,3 +187,38 @@ describe('choosing a transport', () => {
     expect(transportFor('outlook', credentials).key).toBe('log')
   })
 })
+
+describe('reading granted permissions from the token', () => {
+  // Entra puts the consented application permissions in the `roles` claim. Reading
+  // them is how the connect screen can say "read-only" before a campaign silently
+  // fails to send.
+  const jwt = (payload: unknown) =>
+    ['header', Buffer.from(JSON.stringify(payload)).toString('base64url'), 'sig'].join('.')
+
+  it('lists the roles Entra granted', async () => {
+    const { grantedRoles } = await import('../email/graph')
+    expect(grantedRoles(jwt({ roles: ['Mail.Read', 'Mail.Send'] }))).toEqual([
+      'Mail.Read', 'Mail.Send',
+    ])
+  })
+
+  it('returns nothing rather than throwing on a token it cannot read', async () => {
+    const { grantedRoles } = await import('../email/graph')
+    // A malformed token is not worth surfacing — the mailbox call is the real
+    // test — but it must not take the connect flow down with it.
+    for (const bad of ['', 'not-a-jwt', 'a.b', 'a.!!!.c', jwt({ noRoles: true })]) {
+      expect(grantedRoles(bad), bad).toEqual([])
+    }
+  })
+
+  it('accepts base64url padding as Entra emits it', async () => {
+    const { grantedRoles } = await import('../email/graph')
+    // Real tokens use - and _ in place of + and /, and drop the padding.
+    const payload = Buffer.from(JSON.stringify({ roles: ['Mail.ReadWrite'] }))
+      .toString('base64')
+      .replace(/\+/g, '-')
+      .replace(/\//g, '_')
+      .replace(/=+$/, '')
+    expect(grantedRoles(`h.${payload}.s`)).toEqual(['Mail.ReadWrite'])
+  })
+})

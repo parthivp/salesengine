@@ -286,7 +286,19 @@ export async function configureGraph(input: z.input<typeof graphSchema>): Promis
 
     revalidatePath('/admin/mailboxes')
     revalidatePath('/inbox')
-    return { ok: true, blockers: [`Connected as ${check.displayName}.`] }
+    // Reported at connect time, not at the first send. An operator who adds
+    // Mail.Read and forgets Mail.Send has a mailbox that polls replies perfectly
+    // and silently sends nothing — and finds out three days into a campaign.
+    const notes = [`Connected as ${check.result.displayName}.`]
+    if (!check.result.canSend) {
+      notes.push(
+        'Read-only: Mail.Send was not granted, so sequences from this mailbox will be ' +
+          'logged rather than sent. Add the Mail.Send application permission in Entra and ' +
+          'grant admin consent, then reconnect. Reply and connection-acceptance tracking ' +
+          'work without it.'
+      )
+    }
+    return { ok: true, blockers: notes }
   } catch (err) {
     logger.error({ err, mailboxId: d.mailboxId }, 'could not save Graph settings')
     return { ok: false, error: 'Verified, but could not save those settings.' }

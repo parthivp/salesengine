@@ -4,6 +4,7 @@ import { withTenant, db } from '../db'
 import { LINKEDIN_POLICY, assessPacing, DAILY_CEILINGS, withinLimit, LIMITS } from '../linkedin/policy'
 import { draftMessage, checkDraft, groundedHooks, tighten, type DraftContext } from '../linkedin/draft'
 import { parseSalesNav, importSalesNav } from '../linkedin/import'
+import { SALESNAV_FIELDS, SALESNAV_ALIASES } from '../linkedin/fields'
 import { buildQueue, recordAction, enqueueContacts } from '../linkedin/queue'
 
 const owner = new PrismaClient({
@@ -361,13 +362,58 @@ Priya,Raman,VP of Sales,Northwind Logistics,https://linkedin.com/in/priyaraman,B
     expect(sofia.linkedinUrl).toContain('sofiamarchetti')
     expect(sofia.lastName).toBe('Marchetti')
   })
+
+  it('carries company domain and country through to the account', async () => {
+    // Regression. The wizard kept its own hand-copied field list, which offered
+    // neither of these columns — so a file that had them was accepted, reported
+    // success, and quietly discarded both. The account was then matched by name
+    // instead of domain, which is the weaker join, and the failure was invisible
+    // because nothing about the import said it had dropped anything.
+    const p = parseSalesNav(
+      `Profile URL,First Name,Company,Company Domain,Country
+https://linkedin.com/in/marcusberg,Marcus,Helio Freight,www.heliofreight.com/about,Germany
+`
+    )
+    expect(p.suggested.companyDomain).toBe('Company Domain')
+    expect(p.suggested.country).toBe('Country')
+
+    await withTenant(tenantId, () => importSalesNav({ rows: p.rows, mapping: p.suggested }))
+
+    const account = await owner.account.findFirstOrThrow({ where: { tenantId, name: 'Helio Freight' } })
+    // Stripped of scheme, `www.` and path — otherwise the same company arriving
+    // as a bare domain next week creates a second account.
+    expect(account.domain).toBe('heliofreight.com')
+    expect(account.country).toBe('Germany')
+
+    const marcus = await owner.contact.findFirstOrThrow({ where: { tenantId, firstName: 'Marcus' } })
+    expect(marcus.country).toBe('Germany')
+  })
+
+  it('offers every field the importer understands', () => {
+    // Both sides now read one list, so this asserts the list is actually shared
+    // rather than re-copied. If someone reintroduces a literal in the wizard,
+    // adding a field here fails until they update it too.
+    const offered = new Set(SALESNAV_FIELDS.map((f) => f.key))
+    for (const field of new Set(Object.values(SALESNAV_ALIASES))) {
+      expect(offered.has(field)).toBe(true)
+    }
+    expect(offered.has('companyDomain')).toBe(true)
+    expect(offered.has('country')).toBe(true)
+  })
 })
 
 describe('the queue', () => {
+  // A counter, not `Date.now()`. The pacing test seeds three contacts through
+  // Promise.all, which lands them in the same millisecond and made the domain
+  // collide on the unique index — a failure that looked like a bug in the code
+  // under test and appeared only under load.
+  let seedCounter = 0
+
   async function seedContact(over: Record<string, unknown> = {}) {
+    const n = ++seedCounter
     return withTenant(tenantId, async () => {
       const account = await db().account.create({
-        data: { tenantId, name: 'Queue Co', domain: `q${Date.now()}.test`, employeeCount: 300, industry: 'Logistics' },
+        data: { tenantId, name: 'Queue Co', domain: `q${n}.test`, employeeCount: 300, industry: 'Logistics' },
       })
       return db().contact.create({
         data: {

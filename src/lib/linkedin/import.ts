@@ -4,6 +4,7 @@ import { db, tid } from '../db'
 import { normalizeLinkedIn } from '../leads/dedupe'
 import { normalizeEmail, domainFromEmail } from '../utils'
 import { rescoreContact } from '../leads/scoring'
+import { SALESNAV_FIELDS, SALESNAV_ALIASES, type SalesNavField } from './fields'
 
 /**
  * Sales Navigator CSV import.
@@ -12,41 +13,38 @@ import { rescoreContact } from '../leads/scoring'
  * Navigator exports usually have **no email address**. The generic importer keys
  * on email and rejects a row without one, which would throw away the entire file.
  *
- * Here the natural key is the LinkedIn profile URL. That is also the only
- * identifier LinkedIn's own export reliably provides, so it is the honest choice
- * rather than a fallback.
+ * Here the natural key is the LinkedIn profile URL, because it is the one field
+ * that is stable across every way this data reaches us.
  *
- * These files come from a LinkedIn-provided export — the user asks LinkedIn for
- * their own list and downloads it. Nothing here scrapes.
+ * **Where the file comes from.** Not from Sales Navigator. Sales Navigator has no
+ * CSV export on any tier — Core, Advanced or Advanced Plus. LinkedIn omits it
+ * deliberately, and there is no setting, plan or support request that turns it on.
+ * An earlier version of this comment claimed the file was "a LinkedIn-provided
+ * export"; that was wrong, and it sent at least one operator hunting for a button
+ * that does not exist.
+ *
+ * The three ways a file legitimately gets here:
+ *
+ *   1. **Typed or pasted by hand.** A lead list is read off the screen into a
+ *      spreadsheet. Slow, but it is the only path that needs nothing but a browser,
+ *      and for a list of thirty it is twenty minutes.
+ *   2. **Sales Navigator Advanced Plus → CRM sync → export from the CRM.** The
+ *      paid answer LinkedIn actually sells. Advanced Plus writes leads into
+ *      Salesforce or Dynamics; the CRM exports CSV. Our Salesforce connector reads
+ *      the same data directly, which skips the file entirely.
+ *   3. **Apollo (or another provider) searched by name and company.** The list is
+ *      used as a shopping list rather than a source: the names come off
+ *      LinkedIn by eye, and the provider supplies the profile URL, work email and
+ *      company domain under its own licence.
+ *
+ * What is deliberately absent: any browser extension or service that reads
+ * linkedin.com on the user's behalf. Those scrape, they breach LinkedIn's terms,
+ * and the account they put at risk is the operator's own. This importer will never
+ * be fed by one from inside this product.
  */
 
-export const SALESNAV_FIELDS = [
-  { key: 'linkedinUrl', label: 'LinkedIn profile URL', required: true },
-  { key: 'firstName', label: 'First name' },
-  { key: 'lastName', label: 'Last name' },
-  { key: 'title', label: 'Job title' },
-  { key: 'companyName', label: 'Company' },
-  { key: 'companyDomain', label: 'Company domain' },
-  { key: 'email', label: 'Email (if present)' },
-  { key: 'city', label: 'Location' },
-  { key: 'country', label: 'Country' },
-] as const
-
-export type SalesNavField = (typeof SALESNAV_FIELDS)[number]['key']
-
-/** Column names Sales Navigator and the common export tools actually emit. */
-const ALIASES: Record<string, SalesNavField> = {
-  'profile url': 'linkedinUrl', 'linkedin url': 'linkedinUrl', 'person linkedin url': 'linkedinUrl',
-  'linkedin profile': 'linkedinUrl', 'linkedin': 'linkedinUrl', 'profile link': 'linkedinUrl',
-  'first name': 'firstName', firstname: 'firstName', 'given name': 'firstName',
-  'last name': 'lastName', lastname: 'lastName', surname: 'lastName',
-  title: 'title', 'job title': 'title', position: 'title', headline: 'title', 'current title': 'title',
-  company: 'companyName', 'company name': 'companyName', 'current company': 'companyName',
-  organization: 'companyName', account: 'companyName',
-  website: 'companyDomain', 'company website': 'companyDomain', domain: 'companyDomain',
-  email: 'email', 'email address': 'email', 'work email': 'email',
-  location: 'city', 'geography': 'city', city: 'city', country: 'country',
-}
+export { SALESNAV_FIELDS, type SalesNavField }
+const ALIASES = SALESNAV_ALIASES
 
 export type SalesNavParse = {
   headers: string[]
@@ -277,7 +275,7 @@ export async function importSalesNav(opts: {
         data: {
           tenantId: tid(),
           type: 'field_change',
-          summary: 'Imported from a Sales Navigator export',
+          summary: 'Imported from a Sales Navigator lead list',
           contactId: contact.id,
           accountId,
         },

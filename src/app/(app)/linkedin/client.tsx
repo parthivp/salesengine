@@ -10,6 +10,7 @@ import {
   Upload, FileSpreadsheet, AlertTriangle, ListPlus,
 } from 'lucide-react'
 import { record, buildTargetList, runSalesNavImport } from './actions'
+import { SALESNAV_FIELDS, SALESNAV_ALIASES } from '@/lib/linkedin/fields'
 
 type Check = { severity: string; message: string }
 
@@ -306,26 +307,11 @@ export function BuildListButton() {
   )
 }
 
-const SN_FIELDS = [
-  { key: 'linkedinUrl', label: 'Profile URL', required: true },
-  { key: 'firstName', label: 'First name', required: false },
-  { key: 'lastName', label: 'Last name', required: false },
-  { key: 'title', label: 'Title', required: false },
-  { key: 'companyName', label: 'Company', required: false },
-  { key: 'email', label: 'Email (optional)', required: false },
-  { key: 'city', label: 'Location', required: false },
-]
-
-const SN_ALIASES: Record<string, string> = {
-  'profile url': 'linkedinUrl', 'linkedin url': 'linkedinUrl', 'person linkedin url': 'linkedinUrl',
-  linkedin: 'linkedinUrl', 'profile link': 'linkedinUrl',
-  'first name': 'firstName', firstname: 'firstName',
-  'last name': 'lastName', lastname: 'lastName',
-  title: 'title', 'job title': 'title', headline: 'title', 'current title': 'title',
-  company: 'companyName', 'company name': 'companyName', 'current company': 'companyName',
-  email: 'email', 'email address': 'email',
-  location: 'city', geography: 'city', city: 'city',
-}
+// Shared with the server importer. This used to be a hand-copied duplicate, and
+// it had drifted: the server understood `companyDomain` and `country`, the wizard
+// offered neither, so those columns were silently dropped from every file.
+const SN_FIELDS = SALESNAV_FIELDS
+const SN_ALIASES: Record<string, string> = SALESNAV_ALIASES
 
 export function SalesNavImport() {
   const [rows, setRows] = useState<Record<string, string>[]>([])

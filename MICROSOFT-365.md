@@ -1,9 +1,14 @@
 # Connecting a Microsoft 365 mailbox
 
-For reply collection. IMAP is not an option: Basic authentication for IMAP is
-permanently disabled in every Exchange Online tenant, and Microsoft's own
-documentation states that neither you nor Microsoft support can re-enable it. So
-this uses Microsoft Graph with an app registration.
+This is what makes three things work: **replies** arriving in the Inbox,
+**connection acceptances** being detected automatically, and — if you add
+`Mail.Send` at step 3 — **sequences actually sending email**, from your own
+mailbox on your own domain.
+
+IMAP is not an option: Basic authentication for IMAP is permanently disabled in
+every Exchange Online tenant, and Microsoft's own documentation states that
+neither you nor Microsoft support can re-enable it. So this uses Microsoft Graph
+with an app registration.
 
 You need to be a Global Administrator, or have someone who is grant consent at
 step 4.

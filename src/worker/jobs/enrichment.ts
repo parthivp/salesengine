@@ -5,6 +5,7 @@ import {
   personToContactFields, organizationToAccountFields, isStale,
 } from '../../lib/apollo'
 import { rescoreContact } from '../../lib/leads/scoring'
+import { recordUsage, usage } from '../../lib/limits'
 import { domainFromEmail } from '../../lib/utils'
 
 /**
@@ -15,35 +16,30 @@ import { domainFromEmail } from '../../lib/utils'
  *   - stop when the tenant's monthly credit allowance is spent
  */
 
+const ENRICH_CREDITS = 'enrich_credits'
+
 async function creditsRemaining(tenantId: string): Promise<number> {
   const tenant = await db().tenant.findUniqueOrThrow({
     where: { id: tenantId },
     select: { enrichCreditLimit: true },
   })
-  const period = new Date().toISOString().slice(0, 7)
-  const counter = await db().usageCounter.findFirst({
-    where: { period, metric: 'enrich_credits' },
-    select: { value: true },
-  })
-  return Math.max(0, tenant.enrichCreditLimit - (counter?.value ?? 0))
+  return Math.max(0, tenant.enrichCreditLimit - (await usage(ENRICH_CREDITS)))
 }
 
-async function spendCredits(tenantId: string, n: number) {
-  const period = new Date().toISOString().slice(0, 7)
-  const existing = await db().usageCounter.findFirst({
-    where: { period, metric: 'enrich_credits' },
-    select: { id: true },
-  })
-  if (existing) {
-    await db().usageCounter.update({
-      where: { id: existing.id },
-      data: { value: { increment: n } },
-    })
-  } else {
-    await db().usageCounter.create({
-      data: { tenantId, period, metric: 'enrich_credits', value: n },
-    })
-  }
+/**
+ * Charge for matches, not attempts.
+ *
+ * This used to read the counter, then create-or-update it — the same
+ * find-then-write race already fixed in `limits.ts`, and two enrichment jobs
+ * running in the same period would either violate the unique index or lose a
+ * charge. `recordUsage` does it in one atomic upsert.
+ *
+ * And it charged `targets.length` regardless of outcome. Apollo bills per
+ * successful match, so a batch where nothing matched cost the operator nothing
+ * and burned their allowance anyway.
+ */
+async function spendCredits(n: number) {
+  if (n > 0) await recordUsage(ENRICH_CREDITS, n)
 }
 
 export async function enrichContacts({
@@ -153,7 +149,7 @@ export async function enrichContacts({
         enriched++
       }
 
-      await spendCredits(tenantId, targets.length)
+      await spendCredits(enriched)
       logger.info({ tenantId, enriched, attempted: targets.length }, 'contact enrichment complete')
       return { enriched, attempted: targets.length }
     },
@@ -204,7 +200,7 @@ export async function enrichAccounts({
         }
       }
 
-      await spendCredits(tenantId, targets.length)
+      await spendCredits(enriched)
       return { enriched, attempted: targets.length }
     },
     { timeout: 120_000 }

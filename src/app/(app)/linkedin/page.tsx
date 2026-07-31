@@ -5,7 +5,7 @@ import { formatNumber } from '@/lib/utils'
 import { buildQueue } from '@/lib/linkedin/queue'
 import { DAILY_CEILINGS, ACTION_LABEL, LINKEDIN_POLICY } from '@/lib/linkedin/policy'
 import { Linkedin, ShieldCheck } from 'lucide-react'
-import { QueueCards, BuildListButton, SalesNavImport } from './client'
+import { QueueCards, BuildListButton, SalesNavImport, EnrichButton } from './client'
 
 export const metadata = { title: 'LinkedIn queue · SalesEngine' }
 export const dynamic = 'force-dynamic'
@@ -36,6 +36,11 @@ export default async function LinkedInPage() {
 
     return { ...q, counts: { sentToday, withProfile } }
   })
+
+  // Cards drafted from nothing but a location. They all have the same cause and
+  // the same fix, so the offer to fix it belongs once on the page rather than on
+  // each card.
+  const thin = cards.filter((c) => c.draft.generic).length
 
   const serialised = cards.map((c) => ({
     taskId: c.taskId,
@@ -134,6 +139,13 @@ export default async function LinkedInPage() {
         </div>
 
         <div className="space-y-6">
+          {thin > 0 && (
+            <Card className="p-5">
+              <h2 className="text-sm font-semibold text-ink-900 mb-2">These drafts are thin</h2>
+              <EnrichButton thin={thin} />
+            </Card>
+          )}
+
           <SalesNavImport />
 
           <Card className="p-5">

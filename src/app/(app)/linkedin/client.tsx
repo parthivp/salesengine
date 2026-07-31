@@ -8,9 +8,9 @@ import { Card, Badge } from '@/components/ui'
 import { cn, formatNumber } from '@/lib/utils'
 import {
   ExternalLink, Copy, Check, SkipForward, UserCheck, Ban,
-  Upload, FileSpreadsheet, AlertTriangle, ListPlus,
+  Upload, FileSpreadsheet, AlertTriangle, ListPlus, Sparkles,
 } from 'lucide-react'
-import { record, buildTargetList, runSalesNavImport } from './actions'
+import { record, buildTargetList, runSalesNavImport, enrichQueueAccounts } from './actions'
 import { SALESNAV_FIELDS, SALESNAV_ALIASES } from '@/lib/linkedin/fields'
 
 type Check = { severity: string; message: string }
@@ -543,5 +543,61 @@ export function SalesNavImport() {
         )}
       </div>
     </Card>
+  )
+}
+
+/**
+ * One control for the whole page, not one per card.
+ *
+ * Every thin card has the same cause and the same fix — the companies behind them
+ * have no industry or headcount — so a button on each card would be N copies of
+ * one action, and pressing any of them would do the same global thing. It appears
+ * only when there is actually something thin to fix.
+ */
+export function EnrichButton({ thin }: { thin: number }) {
+  const [pending, startTransition] = useTransition()
+  const [message, setMessage] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const router = useRouter()
+
+  function run() {
+    setError(null)
+    setMessage(null)
+    startTransition(async () => {
+      const r = await enrichQueueAccounts()
+      if (!r.ok) {
+        setError(r.error)
+        return
+      }
+      setMessage(
+        r.data?.queued
+          ? `Looking up ${r.data.queued} ${r.data.queued === 1 ? 'company' : 'companies'} in the background. Refresh in a few seconds to see the rebuilt drafts.`
+          : (r.data?.reason ?? 'Nothing to do.')
+      )
+      // The work happens in the worker, so this refresh will not show the result
+      // yet. It is here so the page is current when the user does reload.
+      router.refresh()
+    })
+  }
+
+  return (
+    <div>
+      <p className="text-xs text-ink-600 mb-3">
+        {thin === 1 ? 'One card is' : `${formatNumber(thin)} cards are`} drafted from location
+        alone, because the company behind{' '}
+        {thin === 1 ? 'it has' : 'them has'} no industry or headcount on file. Looking the
+        companies up gives the drafts something real to say.
+      </p>
+      <button
+        onClick={run}
+        disabled={pending}
+        className="inline-flex items-center gap-1.5 rounded-lg border border-ink-200 px-2.5 py-1.5 text-xs font-medium hover:bg-ink-50 disabled:opacity-50 transition"
+      >
+        <Sparkles className="h-3.5 w-3.5" />
+        {pending ? 'Queueing…' : 'Look up the companies'}
+      </button>
+      {message && <p className="mt-2 text-xs text-emerald-700">{message}</p>}
+      {error && <p role="alert" className="mt-2 text-xs text-red-700">{error}</p>}
+    </div>
   )
 }

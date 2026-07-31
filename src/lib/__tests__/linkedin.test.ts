@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest'
 import { PrismaClient } from '@prisma/client'
 import { withTenant, db } from '../db'
 import { LINKEDIN_POLICY, assessPacing, DAILY_CEILINGS, withinLimit, LIMITS } from '../linkedin/policy'
-import { draftMessage, checkDraft, groundedHooks, tighten, type DraftContext } from '../linkedin/draft'
+import { draftMessage, checkDraft, groundedHooks, tighten, placeWithArticle, type DraftContext } from '../linkedin/draft'
 import { parseSalesNav, importSalesNav } from '../linkedin/import'
 import { SALESNAV_FIELDS, SALESNAV_ALIASES } from '../linkedin/fields'
 import { buildQueue, recordAction, enqueueContacts } from '../linkedin/queue'
@@ -135,6 +135,34 @@ describe('drafting', () => {
     expect(d.generic).toBe(true)
     const checks = checkDraft(d, { firstName: 'Ada', company: 'Acme' })
     expect(checks.some((c) => c.message.includes('generic'))).toBe(true)
+  })
+
+  it('counts a city-only draft as generic', () => {
+    // Two people in the same metro used to get near-identical notes reported as
+    // personalised, because city counted as a grounded hook like any other. It is
+    // the weakest one there is: it says nothing about the person.
+    const ctx = { firstName: 'Ada', company: 'Acme', city: 'Los Angeles' }
+    const d = draftMessage(ctx)
+    expect(d.usedHooks).toEqual(['city'])
+    expect(d.generic).toBe(true)
+    expect(checkDraft(d, ctx).some((c) => c.message.includes('only thing known'))).toBe(true)
+
+    // But a real signal alongside it is not generic.
+    const better = draftMessage({ ...ctx, industry: 'Legal services' })
+    expect(better.generic).toBe(false)
+  })
+
+  it('puts an article in front of a region but not a city', () => {
+    expect(placeWithArticle('San Francisco Bay Area')).toBe('the San Francisco Bay Area')
+    expect(placeWithArticle('Greater London Area')).toBe('the Greater London Area')
+    expect(placeWithArticle('Dallas-Fort Worth Metroplex')).toBe('the Dallas-Fort Worth Metroplex')
+    expect(placeWithArticle('Bengaluru')).toBe('Bengaluru')
+    expect(placeWithArticle('Los Angeles, California')).toBe('Los Angeles, California')
+    // Idempotent — a location that already carries the article is left alone.
+    expect(placeWithArticle('the Bay Area')).toBe('the Bay Area')
+
+    const d = draftMessage({ firstName: 'Borong', city: 'San Francisco Bay Area' })
+    expect(d.text).toContain('in the San Francisco Bay Area')
   })
 
   it('always stays inside the connection-note limit', () => {

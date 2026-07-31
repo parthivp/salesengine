@@ -101,6 +101,32 @@ function clean(v: string | undefined): string | undefined {
   return t ? t : undefined
 }
 
+/**
+ * Turns Zod's issue list into something an operator can act on.
+ *
+ * The raw form reads `linkedinUrl: Required`, which names an internal field and
+ * states a rule rather than a remedy. The overwhelmingly common case — a row with
+ * an empty profile URL, because the person's URL was not to hand when the file was
+ * built — deserves to say so, since that row is fixable in about five seconds and
+ * the raw message does not suggest it is fixable at all.
+ */
+const FIELD_LABELS = new Map(SALESNAV_FIELDS.map((f) => [f.key as string, f.label.toLowerCase()]))
+
+function humaniseIssues(issues: { path: PropertyKey[]; message: string }[]): string {
+  return issues
+    .map((issue) => {
+      const key = String(issue.path[0] ?? '')
+      if (key === 'linkedinUrl') {
+        return /required|expected string/i.test(issue.message)
+          ? 'No profile URL — open the person on LinkedIn, copy the address, and put it in that column'
+          : `Profile URL looks wrong: ${issue.message.toLowerCase()}`
+      }
+      const label = FIELD_LABELS.get(key)
+      return label ? `${label}: ${issue.message.toLowerCase()}` : issue.message
+    })
+    .join('; ')
+}
+
 function tidyDomain(v: string | undefined): string | undefined {
   if (!v) return undefined
   return (
@@ -152,7 +178,7 @@ export async function importSalesNav(opts: {
       result.errors.push({
         row: rowNumber,
         profile: candidate.linkedinUrl ?? '',
-        reason: parsed.error.issues.map((x) => `${x.path.join('.') || 'row'}: ${x.message}`).join('; '),
+        reason: humaniseIssues(parsed.error.issues),
       })
       result.skipped++
       continue

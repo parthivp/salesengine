@@ -69,10 +69,10 @@ export default async function LinkedInPage() {
           <div className="text-sm">
             <p className="font-medium text-ink-900">Nothing here touches LinkedIn on your behalf</p>
             <p className="mt-1 text-ink-600 leading-relaxed">
-              No headless browser, no proxies, no auto-send, no scraping. Cards come from your own
-              data and from Sales Navigator exports that LinkedIn gives you. You click Send in your
-              own logged-in session, which is why there is no automation fingerprint to detect — and
-              why your account is not at risk.
+              No headless browser, no proxies, no auto-send, no scraping. Cards are built from
+              contacts already in your CRM — imported by you, synced from your CRM, or enriched by a
+              data provider. You click Send in your own logged-in session, which is why there is no
+              automation fingerprint to detect — and why your account is not at risk.
             </p>
             <p className="mt-1.5 text-ink-500 text-xs">
               Roughly 3 seconds per card. Forty connection requests is about four minutes, against
@@ -120,8 +120,10 @@ export default async function LinkedInPage() {
                 title="Nothing in the queue"
                 description={
                   counts.withProfile > 0
-                    ? `You have ${counts.withProfile} contacts with a LinkedIn profile. Build a target list to start.`
-                    : 'Import a Sales Navigator export, or add profile URLs to your contacts, and the queue fills itself.'
+                    ? `You have ${formatNumber(counts.withProfile)} contact${
+                        counts.withProfile === 1 ? '' : 's'
+                      } with a LinkedIn profile. Build a target list to start.`
+                    : 'Import a CSV of leads, or add profile URLs to your contacts, and the queue fills itself.'
                 }
                 action={<BuildListButton />}
               />

@@ -2,6 +2,7 @@
 
 import { useState, useTransition, useRef } from 'react'
 import Link from 'next/link'
+import { useRouter } from 'next/navigation'
 import Papa from 'papaparse'
 import { Card, Badge } from '@/components/ui'
 import { cn, formatNumber } from '@/lib/utils'
@@ -321,6 +322,7 @@ export function SalesNavImport() {
   const [result, setResult] = useState<Awaited<ReturnType<typeof runSalesNavImport>> | null>(null)
   const [pending, startTransition] = useTransition()
   const inputRef = useRef<HTMLInputElement>(null)
+  const router = useRouter()
 
   function handleFile(file: File) {
     Papa.parse<Record<string, string>>(file, {
@@ -346,17 +348,26 @@ export function SalesNavImport() {
 
   function run(dryRun: boolean) {
     startTransition(async () => {
-      setResult(await runSalesNavImport({ rows, mapping, dryRun, assignToMe: true }))
+      const r = await runSalesNavImport({ rows, mapping, dryRun, assignToMe: true })
+      setResult(r)
+      // The server action revalidates, but this page renders counts in its header
+      // and a queue below. Without an explicit refresh those stay at their
+      // pre-import values, so a successful import looks like it did nothing.
+      if (!dryRun && r.ok) router.refresh()
     })
   }
 
   return (
     <Card>
       <div className="px-5 py-4 border-b border-ink-200">
-        <h2 className="text-sm font-semibold text-ink-900">Sales Navigator import</h2>
+        <h2 className="text-sm font-semibold text-ink-900">Import a lead list</h2>
+        {/* This used to read "An export LinkedIn gives you." Sales Navigator has no
+            CSV export on any plan, so that sentence sent people hunting for a
+            button that does not exist. */}
         <p className="mt-0.5 text-xs text-ink-500">
-          An export LinkedIn gives you. Keyed on profile URL, because these files usually have no
-          email — the generic CSV importer would reject every row.
+          A CSV of people, keyed on profile URL — these lists usually carry no email, and the
+          generic importer would reject every row. Sales Navigator has no export, so build the
+          file by hand or from an enrichment provider.
         </p>
       </div>
 
@@ -431,21 +442,80 @@ export function SalesNavImport() {
               <p role="alert" className="mb-3 text-xs text-red-700">{result.error}</p>
             )}
             {result?.ok && result.data && (
-              <div className="mb-3 rounded-lg border border-ink-200 p-3 text-xs space-y-1">
-                {result.data.dryRun && <Badge tone="brand">Dry run — nothing written</Badge>}
-                <p className="text-ink-700">
-                  {formatNumber(result.data.created)} to create ·{' '}
-                  {formatNumber(result.data.updated)} already known ·{' '}
-                  {formatNumber(result.data.skipped)} unusable
-                </p>
-                <p className="text-ink-500">
-                  {formatNumber(result.data.withoutEmail)} have no email address — normal for these
-                  exports, and they can still be worked on LinkedIn.
-                </p>
+              // Two states, deliberately different to look at. They used to share
+              // one grey box reading "3 to create", which is the correct sentence
+              // for a validation and the wrong one for a finished import — so a
+              // real import looked exactly like the dry run that preceded it, and
+              // read as though nothing had happened.
+              <div
+                role="status"
+                aria-live="polite"
+                className={cn(
+                  'mb-3 rounded-lg border p-3 text-xs space-y-1.5',
+                  result.data.dryRun
+                    ? 'border-ink-200 bg-ink-50'
+                    : 'border-emerald-200 bg-emerald-50'
+                )}
+              >
+                {result.data.dryRun ? (
+                  <>
+                    <Badge tone="brand">Checked — nothing written yet</Badge>
+                    <p className="text-ink-700">
+                      {formatNumber(result.data.created)} would be created ·{' '}
+                      {formatNumber(result.data.updated)} already known ·{' '}
+                      {formatNumber(result.data.skipped)} unusable
+                    </p>
+                    <p className="text-ink-500">Press Import to write them.</p>
+                  </>
+                ) : (
+                  <>
+                    <p className="flex items-center gap-1.5 font-medium text-emerald-900">
+                      <Check className="h-3.5 w-3.5 shrink-0" />
+                      {result.data.created === 0 && result.data.updated === 0
+                        ? 'Nothing to write — every row was already here.'
+                        : `Imported. ${formatNumber(result.data.created)} contact${
+                            result.data.created === 1 ? '' : 's'
+                          } added${
+                            result.data.updated
+                              ? `, ${formatNumber(result.data.updated)} updated`
+                              : ''
+                          }.`}
+                    </p>
+                    {result.data.skipped > 0 && (
+                      <p className="text-emerald-800">
+                        {formatNumber(result.data.skipped)} row
+                        {result.data.skipped === 1 ? ' was' : 's were'} unusable and skipped.
+                      </p>
+                    )}
+                    {/* The single most-asked question after an import: where did they
+                        go, and why is this page still empty? Importing does not queue
+                        anyone — that is a separate, deliberate step. Say so here
+                        rather than leaving it to be discovered. */}
+                    <p className="text-emerald-800">
+                      They are in{' '}
+                      <Link href="/contacts" className="underline underline-offset-2">
+                        Contacts
+                      </Link>{' '}
+                      now — but <strong>not</strong> in the queue. Press{' '}
+                      <strong>Build target list</strong>{' '}
+                      to pull the highest-scoring ones into today&rsquo;s queue.
+                    </p>
+                  </>
+                )}
+                {/* Only when it is true of somebody. "0 of them have no email
+                    address" is a sentence about nobody, and it made the panel
+                    look like it was reporting a problem. */}
+                {result.data.withoutEmail > 0 && (
+                  <p className="text-ink-500">
+                    {formatNumber(result.data.withoutEmail)} of them{' '}
+                    {result.data.withoutEmail === 1 ? 'has' : 'have'} no email address. That is
+                    fine — they can still be worked on LinkedIn.
+                  </p>
+                )}
                 {result.data.errors.length > 0 && (
                   <p className="text-amber-800">
                     {result.data.errors.length} row
-                    {result.data.errors.length === 1 ? '' : 's'} need attention (first:{' '}
+                    {result.data.errors.length === 1 ? ' needs' : 's need'} attention (first:{' '}
                     {result.data.errors[0].reason})
                   </p>
                 )}

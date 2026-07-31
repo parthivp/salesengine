@@ -158,10 +158,31 @@ export function groundedHooks(ctx: DraftContext): Hook[] {
   }
 
   if (ctx.city) {
-    hooks.push({ key: 'city', strength: 1, text: `teams in ${ctx.city}`, clause: `in ${ctx.city}` })
+    const place = placeWithArticle(ctx.city)
+    hooks.push({ key: 'city', strength: 1, text: `teams in ${place}`, clause: `in ${place}` })
   }
 
   return hooks.sort((a, b) => b.strength - a.strength)
+}
+
+/**
+ * "in the San Francisco Bay Area", not "in San Francisco Bay Area".
+ *
+ * LinkedIn's geography field mixes plain city names with region names, and the two
+ * take different articles. Bare cities are fine ("in Bengaluru"); region nouns are
+ * not ("in Greater London Area" reads as though written by a machine, which is
+ * precisely the impression a connection note cannot afford).
+ *
+ * Matched on the trailing noun rather than a list of place names, because the list
+ * of regions is unbounded and the set of nouns LinkedIn uses to build them is not.
+ * A location that already starts with "the" is left alone.
+ */
+const REGION_NOUN = /\b(area|region|metroplex|metro|valley|coast|midlands|riviera|peninsula)$/i
+
+export function placeWithArticle(city: string): string {
+  const trimmed = city.trim()
+  if (/^the\b/i.test(trimmed)) return trimmed
+  return REGION_NOUN.test(trimmed) ? `the ${trimmed}` : trimmed
 }
 
 export type Draft = {
@@ -286,7 +307,12 @@ export function draftMessage(
     usedHooks: used,
     withinLimit: text.length <= limit,
     limit,
-    generic: used.length === 0,
+    // A draft is generic when nothing was known, and *also* when the only thing
+    // known was the city. "A lot of the teams I work with are in Los Angeles" is
+    // grammatical, personalised-looking, and says nothing — two people in the same
+    // metro get near-identical notes. Reporting that as personalised is the one
+    // failure mode this whole module exists to avoid, so city-only counts as thin.
+    generic: used.every((k) => (hooks.find((h) => h.key === k)?.strength ?? 0) <= 1),
     variant,
   }
 }
@@ -350,8 +376,12 @@ export function checkDraft(draft: Draft, ctx: DraftContext): DraftCheck[] {
     out.push({
       severity: 'warning',
       message:
-        'Nothing specific is known about this person, so the draft is generic. Enriching the ' +
-        'record first will land better than sending this.',
+        draft.usedHooks.length === 0
+          ? 'Nothing specific is known about this person, so the draft is generic. Enriching the ' +
+            'record first will land better than sending this.'
+          : 'Location is the only thing known about this person, so the draft is close to ' +
+            'generic — anyone else in the same place gets nearly the same note. Add industry, ' +
+            'headcount or a role signal to the account and rebuild.',
     })
   }
 

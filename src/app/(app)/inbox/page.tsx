@@ -91,7 +91,11 @@ export default async function InboxPage() {
   const interested = rows.filter((r) => r.intent === 'interested').length
   const unmatched = rows.filter((r) => !r.contact).length
 
-  const polling = pollState.filter((m) => Boolean((m.credentials as { imap?: unknown } | null)?.imap))
+  // Both transports count — a Microsoft 365 workspace polls through Graph.
+  const polling = pollState.filter((m) => {
+    const c = m.credentials as { imap?: unknown; graph?: unknown } | null
+    return Boolean(c?.imap || c?.graph)
+  })
   const pollErrors = polling.filter((m) => m.imapLastError)
   const lastPoll = polling
     .map((m) => m.imapLastPolledAt)

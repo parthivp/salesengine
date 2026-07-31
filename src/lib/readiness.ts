@@ -3,6 +3,7 @@ import { env } from './env'
 import { sendingEnabled } from './email/send'
 import { workerStatus, redisReachable } from './health'
 import { imapCredentialsFrom } from './email/imap'
+import { graphCredentialsFrom } from './email/graph'
 
 /**
  * "Is this thing actually ready to run my pipeline?"
@@ -183,7 +184,12 @@ export async function assess(tenantId: string): Promise<Readiness> {
     }
 
     // --- replies ------------------------------------------------------------
-    const polled = mailboxes.filter((m) => imapCredentialsFrom(m.credentials))
+    // Either transport counts. Checking only IMAP would report "no mailbox
+    // polled" for a correctly configured Microsoft 365 workspace, which is the
+    // most misleading thing this page could say.
+    const polled = mailboxes.filter(
+      (m) => imapCredentialsFrom(m.credentials) || graphCredentialsFrom(m.credentials)
+    )
     const failing = polled.filter((m) => m.imapLastError)
     add({
       id: 'reply-polling',
@@ -199,7 +205,7 @@ export async function assess(tenantId: string): Promise<Readiness> {
           : failing.length
             ? `${failing.length} of ${polled.length} mailbox(es) failing to poll.`
             : `${polled.length} mailbox(es) polled.`,
-      fix: polled.length === 0 ? 'Add IMAP details to a mailbox under Mailboxes.' : undefined,
+      fix: polled.length === 0 ? 'Connect a mailbox for replies under Mailboxes.' : undefined,
     })
 
     // --- data ---------------------------------------------------------------

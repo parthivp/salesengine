@@ -6,7 +6,7 @@ import { formatNumber, formatRelative } from '@/lib/utils'
 import { assessReputation, REPUTATION_LIMITS } from '@/lib/email/deliverability'
 import { sendingEnabled } from '@/lib/email/send'
 import { Mail, ShieldCheck, ShieldAlert } from 'lucide-react'
-import { AddMailbox, RecheckButton, ImapPanel } from './client'
+import { AddMailbox, RecheckButton, ReplyTransport } from './client'
 import type { MailboxHealth } from '@prisma/client'
 
 export const metadata = { title: 'Mailboxes · SalesEngine' }
@@ -44,13 +44,22 @@ export default async function MailboxesPage() {
         // Only the non-secret parts of the credential blob reach the client. The
         // sealed password stays on the server; a mailbox password rendered into a
         // page is an account takeover one screenshot away.
-        const imapRaw = (m.credentials as { imap?: { host?: string; user?: string } } | null)?.imap
+        const creds = m.credentials as {
+          imap?: { host?: string; user?: string }
+          graph?: { clientId?: string; tenantId?: string }
+        } | null
+        const imapRaw = creds?.imap
         const imap = imapRaw?.host ? { host: imapRaw.host, user: imapRaw.user ?? null } : null
+        const graphRaw = creds?.graph
+        const graph = graphRaw?.clientId
+          ? { clientId: graphRaw.clientId, tenantId: graphRaw.tenantId ?? null }
+          : null
         const { credentials: _credentials, ...safe } = m
         return {
           ...safe,
           imap,
           stats: { sent, bounced, complained },
+          graph,
           verdict: assessReputation({ sent, bounced, complained }),
         }
       })
@@ -167,12 +176,15 @@ export default async function MailboxesPage() {
                         <RecheckButton mailboxId={m.id} />
                       </div>
 
-                      <ImapPanel
+                      <ReplyTransport
                         mailboxId={m.id}
                         email={m.email}
-                        configured={Boolean(m.imap)}
-                        host={m.imap?.host ?? null}
-                        user={m.imap?.user ?? null}
+                        imapConfigured={Boolean(m.imap)}
+                        graphConfigured={Boolean(m.graph)}
+                        imapHost={m.imap?.host ?? null}
+                        imapUser={m.imap?.user ?? null}
+                        graphClientId={m.graph?.clientId ?? null}
+                        graphTenantId={m.graph?.tenantId ?? null}
                         lastPolledAt={m.imapLastPolledAt ? formatRelative(m.imapLastPolledAt) : null}
                         lastError={m.imapLastError}
                       />

@@ -9,6 +9,7 @@ import { domainFromEmail } from '@/lib/utils'
 import { audit } from '@/lib/audit'
 import { warmupCap } from '@/lib/email/schedule'
 import { seal } from '@/lib/crypto'
+import { verifyGraphAccess } from '@/lib/email/graph'
 import { logger } from '@/lib/logger'
 
 export type MailboxResult =
@@ -203,5 +204,115 @@ export async function disableImap(mailboxId: string): Promise<MailboxResult> {
   } catch (err) {
     logger.error({ err, mailboxId }, 'could not disable IMAP')
     return { ok: false, error: 'Could not disable reply polling.' }
+  }
+}
+
+// --- Microsoft Graph --------------------------------------------------------
+
+const graphSchema = z.object({
+  mailboxId: z.string().min(1),
+  tenantId: z.string().trim().min(10).max(100),
+  clientId: z.string().trim().min(10).max(100),
+  clientSecret: z.string().min(1).max(1024),
+  mailbox: z.string().trim().email(),
+})
+
+/**
+ * Connects a Microsoft 365 mailbox for reply collection.
+ *
+ * Graph rather than IMAP because Basic authentication for IMAP is permanently
+ * disabled in every Exchange Online tenant — Microsoft's documentation is explicit
+ * that neither the tenant admin nor Microsoft support can turn it back on. A
+ * username and password cannot reach an M365 mailbox at all.
+ *
+ * Credentials are verified against Graph before being stored. The two ways this
+ * fails need completely different fixes and are easy to confuse: a wrong secret
+ * fails at Entra, while a missing Application Access Policy authenticates
+ * perfectly and then returns 403 on the mailbox.
+ */
+export async function configureGraph(input: z.input<typeof graphSchema>): Promise<MailboxResult> {
+  const auth = await requirePermission('mailbox:update')
+  const parsed = graphSchema.safeParse(input)
+  if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? 'Invalid input.' }
+  const d = parsed.data
+
+  const check = await verifyGraphAccess({
+    tenantId: d.tenantId,
+    clientId: d.clientId,
+    clientSecret: d.clientSecret,
+    mailbox: d.mailbox,
+  })
+  if (!check.ok) return { ok: false, error: check.error }
+
+  try {
+    await withTenant(auth.tenant.id, async () => {
+      const mailbox = await db().mailbox.findUniqueOrThrow({ where: { id: d.mailboxId } })
+      const credentials = { ...((mailbox.credentials ?? {}) as Record<string, unknown>) }
+
+      // Drop any IMAP config on the same mailbox. Leaving it would be a set of
+      // credentials that cannot possibly work, waiting to confuse whoever reads
+      // this row next.
+      delete credentials.imap
+
+      await db().mailbox.update({
+        where: { id: d.mailboxId },
+        data: {
+          provider: 'outlook',
+          credentials: {
+            ...credentials,
+            graph: {
+              tenantId: d.tenantId,
+              clientId: d.clientId,
+              clientSecret: seal(d.clientSecret),
+              mailbox: d.mailbox,
+            },
+          } as never,
+          // Start from the next poll, not the beginning of the mailbox.
+          graphDeltaLink: null,
+          imapLastUid: null,
+          imapLastError: null,
+          imapLastPolledAt: null,
+        },
+      })
+
+      await audit({
+        actorId: auth.user.id,
+        action: 'connect',
+        entity: 'Mailbox',
+        entityId: d.mailboxId,
+        after: { graph: { tenantId: d.tenantId, clientId: d.clientId, mailbox: d.mailbox } },
+      })
+    })
+
+    revalidatePath('/admin/mailboxes')
+    revalidatePath('/inbox')
+    return { ok: true, blockers: [`Connected as ${check.displayName}.`] }
+  } catch (err) {
+    logger.error({ err, mailboxId: d.mailboxId }, 'could not save Graph settings')
+    return { ok: false, error: 'Verified, but could not save those settings.' }
+  }
+}
+
+/** Removes Graph credentials. Replies stop arriving; nothing ingested changes. */
+export async function disableGraph(mailboxId: string): Promise<MailboxResult> {
+  const auth = await requirePermission('mailbox:update')
+  try {
+    await withTenant(auth.tenant.id, async () => {
+      const mailbox = await db().mailbox.findUniqueOrThrow({ where: { id: mailboxId } })
+      const credentials = { ...((mailbox.credentials ?? {}) as Record<string, unknown>) }
+      delete credentials.graph
+      await db().mailbox.update({
+        where: { id: mailboxId },
+        data: { credentials: credentials as never, graphDeltaLink: null, imapLastError: null },
+      })
+      await audit({
+        actorId: auth.user.id, action: 'disconnect', entity: 'Mailbox', entityId: mailboxId,
+      })
+    })
+    revalidatePath('/admin/mailboxes')
+    return { ok: true }
+  } catch (err) {
+    logger.error({ err, mailboxId }, 'could not disable Graph')
+    return { ok: false, error: 'Could not disconnect.' }
   }
 }

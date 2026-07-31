@@ -1,7 +1,8 @@
 import { prismaAdmin } from '../../lib/db'
 import { logger } from '../../lib/logger'
 import { enqueue } from '../../lib/queue'
-import { fetchNewMessages, imapCredentialsFrom } from '../../lib/email/imap'
+import { fetchNewMessages as fetchImap, imapCredentialsFrom } from '../../lib/email/imap'
+import { fetchNewMessages as fetchGraph, graphCredentialsFrom } from '../../lib/email/graph'
 import { ingestInbound } from '../../lib/email/receive'
 
 /**
@@ -36,7 +37,7 @@ export async function pollDueMailboxes(): Promise<{ queued: number; skipped: num
   for (const mailbox of mailboxes) {
     // Most mailboxes are send-only. Checking here rather than in the poll job
     // keeps the queue free of jobs whose only outcome is "nothing configured".
-    if (!imapCredentialsFrom(mailbox.credentials)) {
+    if (!imapCredentialsFrom(mailbox.credentials) && !graphCredentialsFrom(mailbox.credentials)) {
       skipped++
       continue
     }
@@ -54,18 +55,38 @@ export async function pollMailbox(data: {
 }): Promise<{ fetched: number; ingested: number; duplicates: number; unmatched: number }> {
   const mailbox = await prismaAdmin.mailbox.findUnique({
     where: { id: data.mailboxId },
-    select: { id: true, tenantId: true, email: true, credentials: true, imapLastUid: true },
+    select: {
+      id: true, tenantId: true, email: true, credentials: true,
+      imapLastUid: true, graphDeltaLink: true,
+    },
   })
   if (!mailbox) return { fetched: 0, ingested: 0, duplicates: 0, unmatched: 0 }
 
-  const creds = imapCredentialsFrom(mailbox.credentials)
-  if (!creds) return { fetched: 0, ingested: 0, duplicates: 0, unmatched: 0 }
+  // Graph first: a mailbox with both configured is a Microsoft 365 one that was
+  // migrated off IMAP, and the IMAP credentials there can no longer authenticate.
+  const graph = graphCredentialsFrom(mailbox.credentials)
+  const imap = graph ? null : imapCredentialsFrom(mailbox.credentials)
+  if (!graph && !imap) return { fetched: 0, ingested: 0, duplicates: 0, unmatched: 0 }
 
-  const log = logger.child({ mailboxId: mailbox.id, email: mailbox.email })
+  const log = logger.child({
+    mailboxId: mailbox.id,
+    email: mailbox.email,
+    transport: graph ? 'graph' : 'imap',
+  })
 
-  let result
+  let result: { messages: Awaited<ReturnType<typeof fetchImap>>['messages']; errors: string[] }
+  let nextCursor: { imapLastUid?: number; graphDeltaLink?: string | null } = {}
+
   try {
-    result = await fetchNewMessages(creds, mailbox.imapLastUid ?? 0)
+    if (graph) {
+      const r = await fetchGraph(graph, mailbox.graphDeltaLink ?? null, { log })
+      result = { messages: r.messages, errors: r.errors }
+      nextCursor = { graphDeltaLink: r.deltaLink }
+    } else {
+      const r = await fetchImap(imap!, mailbox.imapLastUid ?? 0)
+      result = { messages: r.messages, errors: r.errors }
+      nextCursor = { imapLastUid: r.highestUid }
+    }
   } catch (err) {
     // Record the failure on the row so it is visible in the admin UI rather than
     // only in the log — a mailbox that stopped polling three weeks ago is exactly
@@ -74,10 +95,10 @@ export async function pollMailbox(data: {
       where: { id: mailbox.id },
       data: {
         imapLastPolledAt: new Date(),
-        imapLastError: err instanceof Error ? err.message.slice(0, 500) : 'Unknown IMAP error',
+        imapLastError: err instanceof Error ? err.message.slice(0, 500) : 'Unknown polling error',
       },
     })
-    log.error({ err }, 'IMAP poll failed')
+    log.error({ err }, 'mailbox poll failed')
     throw err
   }
 
@@ -102,7 +123,7 @@ export async function pollMailbox(data: {
   await prismaAdmin.mailbox.update({
     where: { id: mailbox.id },
     data: {
-      imapLastUid: result.highestUid,
+      ...nextCursor,
       imapLastPolledAt: new Date(),
       imapLastError: result.errors.length ? result.errors.slice(0, 3).join('; ').slice(0, 500) : null,
     },
@@ -110,7 +131,7 @@ export async function pollMailbox(data: {
 
   if (result.messages.length) {
     log.info(
-      { fetched: result.messages.length, ingested, duplicates, unmatched, uid: result.highestUid },
+      { fetched: result.messages.length, ingested, duplicates, unmatched },
       'mailbox polled'
     )
   }

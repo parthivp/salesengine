@@ -661,6 +661,12 @@ model Mailbox {
   imapLastPolledAt DateTime?
   imapLastError    String?
 
+  // Microsoft Graph's delta link — an opaque URL encoding where the last poll
+  // finished. Serves the same purpose as imapLastUid for the Graph transport,
+  // which exists because Basic auth for IMAP is permanently off in Exchange
+  // Online. imapLastPolledAt and imapLastError are shared by both.
+  graphDeltaLink String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

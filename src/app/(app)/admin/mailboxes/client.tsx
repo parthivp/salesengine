@@ -2,8 +2,12 @@
 
 import { useState, useTransition } from 'react'
 import { Card } from '@/components/ui'
+import { cn } from '@/lib/utils'
 import { RefreshCw, Plus } from 'lucide-react'
-import { addMailbox, recheckMailbox, configureImap, disableImap, type MailboxResult } from './actions'
+import {
+  addMailbox, recheckMailbox, configureImap, disableImap,
+  configureGraph, disableGraph, type MailboxResult,
+} from './actions'
 
 export function AddMailbox() {
   const [email, setEmail] = useState('')
@@ -304,4 +308,235 @@ function guessHost(email: string): string {
   if (/yahoo\./.test(domain)) return 'imap.mail.yahoo.com'
   if (/zoho\./.test(domain)) return 'imap.zoho.com'
   return domain ? `imap.${domain}` : ''
+}
+
+/**
+ * Microsoft 365 reply collection, through Graph.
+ *
+ * A separate panel from the IMAP one rather than a mode of it, because the two
+ * ask for entirely different things and mixing them produces a form where half
+ * the fields are always irrelevant. Which one a mailbox uses is decided by its
+ * provider, not by a toggle the operator has to reason about.
+ */
+export function GraphPanel({
+  mailboxId,
+  email,
+  configured,
+  clientId,
+  entraTenantId,
+  lastPolledAt,
+  lastError,
+}: {
+  mailboxId: string
+  email: string
+  configured: boolean
+  clientId?: string | null
+  entraTenantId?: string | null
+  lastPolledAt?: string | null
+  lastError?: string | null
+}) {
+  const [open, setOpen] = useState(false)
+  const [form, setForm] = useState({
+    tenantId: entraTenantId ?? '',
+    clientId: clientId ?? '',
+    clientSecret: '',
+    mailbox: email,
+  })
+  const [error, setError] = useState<string | null>(null)
+  const [ok, setOk] = useState<string | null>(null)
+  const [pending, startTransition] = useTransition()
+
+  function set(key: keyof typeof form) {
+    return (e: React.ChangeEvent<HTMLInputElement>) => {
+      setForm((f) => ({ ...f, [key]: e.target.value }))
+      setOk(null)
+    }
+  }
+
+  function save() {
+    setError(null)
+    setOk(null)
+    startTransition(async () => {
+      const r = await configureGraph({ mailboxId, ...form })
+      if (!r.ok) setError(r.error)
+      else {
+        setOk(r.blockers?.[0] ?? 'Connected.')
+        setOpen(false)
+        setForm((f) => ({ ...f, clientSecret: '' }))
+      }
+    })
+  }
+
+  function turnOff() {
+    setError(null)
+    startTransition(async () => {
+      const r = await disableGraph(mailboxId)
+      if (!r.ok) setError(r.error)
+      else setOk('Disconnected.')
+    })
+  }
+
+  return (
+    <div className="mt-3 rounded-lg border border-ink-200 bg-ink-50/40 p-3">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div className="min-w-0">
+          <p className="text-xs font-medium text-ink-800">
+            Microsoft 365 reply collection{' '}
+            {configured ? (
+              <span className="text-emerald-700">on</span>
+            ) : (
+              <span className="text-amber-800">off — replies will not be detected</span>
+            )}
+          </p>
+          {configured && (
+            <p className="text-xs text-ink-500 mt-0.5">
+              App {clientId?.slice(0, 8)}… reading {email}
+              {lastPolledAt ? ` · last polled ${lastPolledAt}` : ' · not polled yet'}
+            </p>
+          )}
+          {lastError && <p className="mt-0.5 text-xs text-red-700">{lastError}</p>}
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setOpen((v) => !v)}
+            className="rounded-md border border-ink-200 bg-white px-2.5 py-1.5 text-xs font-medium hover:bg-ink-50 transition"
+          >
+            {configured ? 'Change' : 'Connect'}
+          </button>
+          {configured && (
+            <button
+              onClick={turnOff}
+              disabled={pending}
+              className="rounded-md px-2.5 py-1.5 text-xs text-ink-500 hover:bg-ink-100 disabled:opacity-50 transition"
+            >
+              Disconnect
+            </button>
+          )}
+        </div>
+      </div>
+
+      {ok && <p className="mt-2 text-xs text-emerald-700">{ok}</p>}
+      {error && <p role="alert" className="mt-2 text-xs text-red-700">{error}</p>}
+
+      {open && (
+        <div className="mt-3 space-y-2">
+          <p className="text-xs text-ink-500">
+            From your Entra app registration. IMAP is not an option on Microsoft 365 — Basic
+            authentication is permanently disabled there, so this uses Graph instead.
+          </p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            <Field label="Directory (tenant) ID" value={form.tenantId} onChange={set('tenantId')}
+                   placeholder="00000000-0000-0000-0000-000000000000" />
+            <Field label="Application (client) ID" value={form.clientId} onChange={set('clientId')}
+                   placeholder="00000000-0000-0000-0000-000000000000" />
+            <Field label="Client secret value" value={form.clientSecret} onChange={set('clientSecret')}
+                   type="password" placeholder="write-only" />
+            <Field label="Mailbox to read" value={form.mailbox} onChange={set('mailbox')}
+                   placeholder={email} />
+          </div>
+          <button
+            onClick={save}
+            disabled={pending || !form.tenantId || !form.clientId || !form.clientSecret || !form.mailbox}
+            className="rounded-lg bg-brand-600 px-3 py-2 text-sm font-medium text-white hover:bg-brand-700 disabled:opacity-50 disabled:cursor-not-allowed transition"
+          >
+            {pending ? 'Verifying…' : 'Verify and connect'}
+          </button>
+          <p className="text-xs text-ink-400">
+            The credentials are checked against Graph before anything is saved, and the secret is
+            encrypted and never shown again. Polling starts from the next message, so existing mail
+            is not ingested.
+          </p>
+        </div>
+      )}
+    </div>
+  )
+}
+
+/**
+ * Chooses which reply transport a mailbox uses.
+ *
+ * Guessing from the address does not work: a Microsoft 365 tenant on a custom
+ * domain looks exactly like any other domain, and the `provider` column already
+ * means something else — how mail is *sent*, which is SES regardless. So this
+ * asks, once, and then shows only the panel that applies.
+ */
+export function ReplyTransport({
+  mailboxId,
+  email,
+  imapConfigured,
+  graphConfigured,
+  imapHost,
+  imapUser,
+  graphClientId,
+  graphTenantId,
+  lastPolledAt,
+  lastError,
+}: {
+  mailboxId: string
+  email: string
+  imapConfigured: boolean
+  graphConfigured: boolean
+  imapHost?: string | null
+  imapUser?: string | null
+  graphClientId?: string | null
+  graphTenantId?: string | null
+  lastPolledAt?: string | null
+  lastError?: string | null
+}) {
+  const [choice, setChoice] = useState<'graph' | 'imap'>(
+    graphConfigured ? 'graph' : imapConfigured ? 'imap' : 'graph'
+  )
+
+  const configured = graphConfigured || imapConfigured
+
+  return (
+    <div className="mt-3">
+      {!configured && (
+        <div className="flex items-center gap-2 mb-2">
+          <span className="text-xs text-ink-500">Replies arrive via:</span>
+          {(
+            [
+              ['graph', 'Microsoft 365'],
+              ['imap', 'IMAP (Gmail, Zoho, custom)'],
+            ] as const
+          ).map(([value, label]) => (
+            <button
+              key={value}
+              onClick={() => setChoice(value)}
+              className={cn(
+                'rounded-md border px-2.5 py-1 text-xs transition',
+                choice === value
+                  ? 'border-brand-400 bg-brand-50 text-brand-800 font-medium'
+                  : 'border-ink-200 hover:bg-ink-50'
+              )}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {choice === 'graph' ? (
+        <GraphPanel
+          mailboxId={mailboxId}
+          email={email}
+          configured={graphConfigured}
+          clientId={graphClientId}
+          entraTenantId={graphTenantId}
+          lastPolledAt={lastPolledAt}
+          lastError={lastError}
+        />
+      ) : (
+        <ImapPanel
+          mailboxId={mailboxId}
+          email={email}
+          configured={imapConfigured}
+          host={imapHost}
+          user={imapUser}
+          lastPolledAt={lastPolledAt}
+          lastError={lastError}
+        />
+      )}
+    </div>
+  )
 }

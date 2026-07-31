@@ -281,6 +281,13 @@ model Contact {
   lastContactedAt DateTime?
   lastRepliedAt   DateTime?
 
+  /// When a connection request was recorded as sent. The rep's word, not an
+  /// observation — the app cannot see LinkedIn.
+  linkedinInvitedAt   DateTime?
+  /// When they accepted. Set from LinkedIn's own notification email, or from the
+  /// Connections export, or by the rep marking a card "already connected".
+  linkedinConnectedAt DateTime?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -297,6 +304,9 @@ model Contact {
   @@index([tenantId, ownerId])
   @@index([tenantId, status])
   @@index([tenantId, score])
+  // "Who did I invite that has not accepted yet" is the query the follow-up queue
+  // runs, and it reads both columns.
+  @@index([tenantId, linkedinInvitedAt, linkedinConnectedAt])
   @@map("contacts")
 }
 

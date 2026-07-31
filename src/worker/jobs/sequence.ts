@@ -10,7 +10,7 @@ import {
   transportFor, newMessageId, unsubscribeUrl, appendTrackingPixel,
   rewriteLinksForTracking, textToHtml, type OutboundEmail,
 } from '../../lib/email/send'
-import { ingestInbound } from '../../lib/email/receive'
+import { ingestInbound, isReply } from '../../lib/email/receive'
 import { checkEmailQuota, recordEmailSent } from '../../lib/limits'
 import type { EnrollmentStatus, SequenceStep } from '@prisma/client'
 
@@ -751,7 +751,7 @@ export async function recordReply({
   })
 
   return {
-    stoppedEnrollments: result.ok
+    stoppedEnrollments: isReply(result)
       ? Number(/stopped (\d+) enrollment/.exec(result.actions.join(' '))?.[1] ?? 0)
       : 0,
   }

@@ -10,6 +10,7 @@ import { assessPacing, withinLimit, type LinkedInActionType } from '@/lib/linked
 import { audit } from '@/lib/audit'
 import { enqueue } from '@/lib/queue'
 import { apolloEnabled, isStale } from '@/lib/apollo'
+import { importConnections, type ConnectionsResult } from '@/lib/linkedin/connections'
 import { logger } from '@/lib/logger'
 
 export type Result<T = undefined> = { ok: true; data?: T } | { ok: false; error: string }
@@ -224,5 +225,40 @@ export async function enrichQueueAccounts(): Promise<Result<{ queued: number; re
   } catch (err) {
     logger.error({ err }, 'queueing account enrichment failed')
     return { ok: false, error: err instanceof Error ? err.message : 'Could not queue enrichment.' }
+  }
+}
+
+/**
+ * Imports LinkedIn's own Connections export.
+ *
+ * The backstop to notification-email detection, which only sees mail arriving
+ * after the mailbox was connected. This file is the complete list with dates, so
+ * one upload backfills every connection made before that — including every
+ * invitation sent before any of this existed.
+ */
+export async function runConnectionsImport(input: {
+  text: string
+  dryRun: boolean
+}): Promise<Result<ConnectionsResult>> {
+  const auth = await requireAuth()
+  const parsed = z
+    .object({ text: z.string().min(1).max(20_000_000), dryRun: z.boolean() })
+    .safeParse(input)
+  if (!parsed.success) return { ok: false, error: 'Could not read that file.' }
+
+  try {
+    const result = await withTenant(
+      auth.tenant.id,
+      () => importConnections(parsed.data.text, { dryRun: parsed.data.dryRun }),
+      { timeout: 240_000 }
+    )
+    if (!parsed.data.dryRun) {
+      revalidatePath('/linkedin')
+      revalidatePath('/contacts')
+    }
+    return { ok: true, data: result }
+  } catch (err) {
+    logger.error({ err }, 'connections import failed')
+    return { ok: false, error: err instanceof Error ? err.message : 'Import failed.' }
   }
 }

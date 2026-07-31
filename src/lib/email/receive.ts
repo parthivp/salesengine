@@ -3,6 +3,7 @@ import { classifyReply, INTENT_LABEL, type ReplyClassification } from './classif
 import { normalizeEmail, domainFromEmail } from '../utils'
 import { rescoreContact } from '../leads/scoring'
 import { logger } from '../logger'
+import { detectAcceptance, recordAcceptance } from '../linkedin/acceptance'
 
 /**
  * Inbound mail ingestion, provider-agnostic.
@@ -39,11 +40,37 @@ export type IngestResult =
   | { ok: false; reason: 'duplicate' | 'no_contact' | 'no_tenant'; messageId: string }
   | {
       ok: true
+      kind?: 'reply'
       messageId: string
       contactId: string
       classification: ReplyClassification
       actions: string[]
     }
+  // A LinkedIn notification is not a reply and has no contact of its own — it is
+  // mail *about* contacts. Kept as its own variant rather than squeezed into the
+  // reply shape, so nothing downstream reads a classification that was never made.
+  | {
+      ok: true
+      kind: 'linkedin_acceptance'
+      messageId: string
+      matched: number
+      alreadyKnown: number
+      unmatched: string[]
+    }
+
+/**
+ * Narrows to the reply case.
+ *
+ * Worth a helper rather than repeating the discriminant: adding the acceptance
+ * variant made every existing caller a type error, which is the compiler correctly
+ * pointing out that "we ingested something" no longer implies "we ingested a reply
+ * from a prospect".
+ */
+export function isReply(
+  r: IngestResult
+): r is Extract<IngestResult, { classification: ReplyClassification }> {
+  return r.ok && r.kind !== 'linkedin_acceptance'
+}
 
 /** How far back to look when matching a reply to a contact by address alone. */
 const ADDRESS_MATCH_WINDOW_MS = 180 * 86_400_000
@@ -143,6 +170,28 @@ export async function ingestInbound(
       select: { id: true },
     })
     if (existing) return { ok: false, reason: 'duplicate', messageId: msg.messageId }
+
+    // Before anything else: LinkedIn's own notifications are not prospect replies.
+    // A "X accepted your invitation" mail comes from linkedin.com, threads to
+    // nothing, and would otherwise be stored as an unmatched inbound message and
+    // read by nobody — while carrying the one fact the LinkedIn queue cannot
+    // observe for itself.
+    const acceptance = detectAcceptance(msg)
+    if (acceptance) {
+      const r = await recordAcceptance(acceptance.profiles, msg.receivedAt)
+      logger.info(
+        { messageId: msg.messageId, ...r, unmatched: r.unmatched.length },
+        'linkedin connection acceptance'
+      )
+      return {
+        ok: true,
+        kind: 'linkedin_acceptance',
+        messageId: msg.messageId,
+        matched: r.matched,
+        alreadyKnown: r.alreadyKnown,
+        unmatched: r.unmatched,
+      }
+    }
 
     const thread = await findThread(msg)
     const classification = classifyReply(

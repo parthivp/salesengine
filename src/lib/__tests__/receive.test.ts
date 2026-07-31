@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest'
 import { PrismaClient } from '@prisma/client'
 import { withTenant, db } from '../db'
-import { ingestInbound, normalizeSubject, tenantForInbound, type InboundMessage } from '../email/receive'
+import { ingestInbound, isReply, normalizeSubject, tenantForInbound, type InboundMessage } from '../email/receive'
 
 /**
  * Reply ingestion against real Postgres.
@@ -141,7 +141,7 @@ describe('threading', () => {
     const sent = await outbound({ messageId: '<abc@recvtest.test>' })
     const r = await ingestInbound(tenantId, inbound({ inReplyTo: '<abc@recvtest.test>' }), NOW)
     expect(r.ok).toBe(true)
-    if (!r.ok) return
+    if (!isReply(r)) return
     expect(r.contactId).toBe(contactId)
     expect(r.actions[0]).toContain('In-Reply-To')
 
@@ -157,14 +157,14 @@ describe('threading', () => {
       NOW
     )
     expect(r.ok).toBe(true)
-    if (r.ok) expect(r.actions[0]).toContain('References')
+    if (isReply(r)) expect(r.actions[0]).toContain('References')
   })
 
   it('falls back to the sender address when no header matches', async () => {
     await outbound()
     const r = await ingestInbound(tenantId, inbound(), NOW)
     expect(r.ok).toBe(true)
-    if (r.ok) expect(r.contactId).toBe(contactId)
+    if (isReply(r)) expect(r.contactId).toBe(contactId)
   })
 
   it('prefers the outbound whose subject matches the thread', async () => {
@@ -257,7 +257,7 @@ describe('what a reply does to the sequence', () => {
     )
 
     expect(r.ok).toBe(true)
-    if (r.ok) expect(r.classification.intent).toBe('out_of_office')
+    if (isReply(r)) expect(r.classification.intent).toBe('out_of_office')
 
     const after = await owner.sequenceEnrollment.findUniqueOrThrow({ where: { id: e.id } })
     expect(after.status).toBe('active')
@@ -393,7 +393,7 @@ describe('tasks and contact state', () => {
     await outbound()
     const r = await ingestInbound(tenantId, inbound({ bodyText: 'hmm' }), NOW)
     expect(r.ok).toBe(true)
-    if (r.ok) expect(r.classification.needsReview).toBe(true)
+    if (isReply(r)) expect(r.classification.needsReview).toBe(true)
 
     const task = await owner.task.findFirstOrThrow({ where: { tenantId } })
     expect(task.title).toContain('needs a read')

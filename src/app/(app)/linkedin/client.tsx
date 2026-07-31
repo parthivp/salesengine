@@ -10,7 +10,7 @@ import {
   ExternalLink, Copy, Check, SkipForward, UserCheck, Ban,
   Upload, FileSpreadsheet, AlertTriangle, ListPlus, Sparkles,
 } from 'lucide-react'
-import { record, buildTargetList, runSalesNavImport, enrichQueueAccounts } from './actions'
+import { record, buildTargetList, runSalesNavImport, enrichQueueAccounts, runConnectionsImport } from './actions'
 import { SALESNAV_FIELDS, SALESNAV_ALIASES } from '@/lib/linkedin/fields'
 
 type Check = { severity: string; message: string }
@@ -598,6 +598,76 @@ export function EnrichButton({ thin }: { thin: number }) {
       </button>
       {message && <p className="mt-2 text-xs text-emerald-700">{message}</p>}
       {error && <p role="alert" className="mt-2 text-xs text-red-700">{error}</p>}
+    </div>
+  )
+}
+
+/**
+ * Uploads LinkedIn's Connections export.
+ *
+ * Deliberately understated in the UI: the notification-email path handles this by
+ * itself from now on, and this is the one-off backfill plus an occasional
+ * reconciliation. Presenting it as a routine step would imply the automatic path
+ * cannot be trusted.
+ */
+export function ConnectionsImport() {
+  const [pending, startTransition] = useTransition()
+  const [result, setResult] = useState<Awaited<ReturnType<typeof runConnectionsImport>> | null>(null)
+  const [fileName, setFileName] = useState('')
+  const inputRef = useRef<HTMLInputElement>(null)
+  const router = useRouter()
+
+  function handle(file: File) {
+    setFileName(file.name)
+    const reader = new FileReader()
+    reader.onload = () => {
+      const text = String(reader.result ?? '')
+      startTransition(async () => {
+        const r = await runConnectionsImport({ text, dryRun: false })
+        setResult(r)
+        if (r.ok) router.refresh()
+      })
+    }
+    reader.readAsText(file)
+  }
+
+  return (
+    <div>
+      <p className="text-xs text-ink-600 mb-3">
+        The app marks people connected automatically, from LinkedIn&rsquo;s own
+        &ldquo;accepted your invitation&rdquo; emails. Upload{' '}
+        <code className="text-[11px] bg-ink-100 px-1 py-0.5 rounded">Connections.csv</code> to
+        backfill everyone who accepted before that was switched on — Settings → Data privacy →
+        Get a copy of your data.
+      </p>
+      <button
+        onClick={() => inputRef.current?.click()}
+        disabled={pending}
+        className="inline-flex items-center gap-1.5 rounded-lg border border-ink-200 px-2.5 py-1.5 text-xs font-medium hover:bg-ink-50 disabled:opacity-50 transition"
+      >
+        <Upload className="h-3.5 w-3.5" />
+        {pending ? 'Reading…' : 'Upload Connections.csv'}
+      </button>
+      <input
+        ref={inputRef}
+        type="file"
+        accept=".csv,text/csv"
+        className="hidden"
+        onChange={(e) => {
+          const f = e.target.files?.[0]
+          if (f) handle(f)
+        }}
+      />
+      {result && !result.ok && (
+        <p role="alert" className="mt-2 text-xs text-red-700">{result.error}</p>
+      )}
+      {result?.ok && result.data && (
+        <p role="status" className="mt-2 text-xs text-emerald-700">
+          {fileName}: {formatNumber(result.data.matched)} marked connected,{' '}
+          {formatNumber(result.data.alreadyKnown)} already known,{' '}
+          {formatNumber(result.data.unmatched)} not in your contacts.
+        </p>
+      )}
     </div>
   )
 }

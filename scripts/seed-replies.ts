@@ -1,6 +1,6 @@
 import 'dotenv/config'
 import { prismaAdmin, withTenant, db, disconnect } from '../src/lib/db'
-import { ingestInbound, type InboundMessage } from '../src/lib/email/receive'
+import { ingestInbound, isReply, type InboundMessage } from '../src/lib/email/receive'
 
 /**
  * Seeds the inbox by pushing messages through the real ingestion path.
@@ -115,12 +115,12 @@ async function main() {
         msg.receivedAt = new Date(Date.now() - CASES.indexOf(c) * 3_600_000)
 
         const r = await ingestInbound(tenant.id, msg)
-        if (r.ok) {
+        if (isReply(r)) {
           console.log(
             `  ${contact.firstName}: ${r.classification.intent} ` +
               `(${Math.round(r.classification.confidence * 100)}%) — ${r.actions.join(', ')}`
           )
-        } else {
+        } else if (!r.ok) {
           console.log(`  ${contact.firstName}: not ingested (${r.reason})`)
         }
       }

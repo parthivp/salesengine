@@ -272,9 +272,28 @@ export async function recordAction(opts: {
       })
     }
 
+    // Marking a card "already connected" is a statement that the connection
+    // exists, which is the same fact the notification email carries. Recording it
+    // here means the acceptance report is not skewed by everyone the rep knew
+    // already.
+    if (outcome === 'already_connected') {
+      await db().contact.updateMany({
+        where: { id: task.contactId, linkedinConnectedAt: null },
+        data: { linkedinConnectedAt: new Date() },
+      })
+    }
+
     // A sent connection request earns a follow-up: the value is in the message
     // after acceptance, and that is the step teams forget.
     if (outcome === 'sent' && action === 'connect') {
+      // Stamped so "invited but never accepted" is answerable. Without this the
+      // app knows a card was actioned but not that an invitation is outstanding,
+      // and outstanding-for-three-weeks is the thing worth seeing.
+      await db().contact.updateMany({
+        where: { id: task.contactId, linkedinInvitedAt: null },
+        data: { linkedinInvitedAt: new Date() },
+      })
+
       await db().task.create({
         data: {
           tenantId: tid(),

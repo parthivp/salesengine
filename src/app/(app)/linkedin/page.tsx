@@ -3,15 +3,18 @@ import { withTenant, db } from '@/lib/db'
 import { PageHeader, Card, StatTile, EmptyState, Badge } from '@/components/ui'
 import { formatNumber } from '@/lib/utils'
 import { buildQueue } from '@/lib/linkedin/queue'
-import { DAILY_CEILINGS, ACTION_LABEL, LINKEDIN_POLICY } from '@/lib/linkedin/policy'
+import { DAILY_CEILINGS, ACTION_LABEL } from '@/lib/linkedin/policy'
 import { Linkedin, ShieldCheck } from 'lucide-react'
-import { QueueCards, BuildListButton, SalesNavImport, EnrichButton } from './client'
+import { QueueCards, BuildListButton, SalesNavImport, EnrichButton, ConnectionsImport } from './client'
 
 export const metadata = { title: 'LinkedIn queue · SalesEngine' }
 export const dynamic = 'force-dynamic'
 
 export default async function LinkedInPage() {
   const auth = await requireAuth()
+  // Read the clock once, at the top. The page is force-dynamic so this is a fresh
+  // value per request, and hoisting it keeps the render itself pure.
+  const now = new Date().getTime()
 
   const { cards, pacing, counts } = await withTenant(auth.tenant.id, async () => {
     const q = await buildQueue({
@@ -22,7 +25,7 @@ export default async function LinkedInPage() {
     const startOfDay = new Date()
     startOfDay.setHours(0, 0, 0, 0)
 
-    const [sentToday, withProfile] = await Promise.all([
+    const [sentToday, withProfile, invited, connected, pending] = await Promise.all([
       db().task.count({
         where: {
           type: 'linkedin', assigneeId: auth.user.id, status: 'completed',
@@ -32,9 +35,28 @@ export default async function LinkedInPage() {
       db().contact.count({
         where: { linkedinUrl: { not: null }, status: { notIn: ['do_not_contact', 'unqualified'] } },
       }),
+      db().contact.count({ where: { linkedinInvitedAt: { not: null } } }),
+      db().contact.count({ where: { linkedinConnectedAt: { not: null } } }),
+      // Invited, no acceptance seen. Not the same as "declined" — LinkedIn never
+      // tells anyone that — so the label says outstanding, not rejected.
+      db().contact.findMany({
+        where: { linkedinInvitedAt: { not: null }, linkedinConnectedAt: null },
+        select: { linkedinInvitedAt: true },
+        orderBy: { linkedinInvitedAt: 'asc' },
+      }),
     ])
 
-    return { ...q, counts: { sentToday, withProfile } }
+    const oldest = pending[0]?.linkedinInvitedAt ?? null
+    return {
+      ...q,
+      counts: {
+        sentToday, withProfile, invited, connected,
+        pending: pending.length,
+        oldestPendingDays: oldest
+          ? Math.floor((now - oldest.getTime()) / 86_400_000)
+          : null,
+      },
+    }
   })
 
   // Cards drafted from nothing but a location. They all have the same cause and
@@ -100,10 +122,29 @@ export default async function LinkedInPage() {
           value={formatNumber(counts.withProfile)}
           hint="eligible for the queue"
         />
+        {/* The question the queue could not answer before: of everyone you invited,
+            how many said yes — and is anything sitting unanswered for weeks. */}
         <StatTile
-          label="Automation"
-          value="None"
-          hint={LINKEDIN_POLICY.sendMechanism.replace(/-/g, ' ')}
+          label="Invitations accepted"
+          value={
+            counts.invited > 0
+              ? `${formatNumber(counts.connected)} / ${formatNumber(counts.invited)}`
+              : '—'
+          }
+          hint={
+            counts.invited === 0
+              ? 'none sent yet'
+              : counts.pending === 0
+                ? 'all answered'
+                : counts.oldestPendingDays != null && counts.oldestPendingDays >= 14
+                  ? `${formatNumber(counts.pending)} outstanding, oldest ${counts.oldestPendingDays}d`
+                  : `${formatNumber(counts.pending)} outstanding`
+          }
+          tone={
+            counts.oldestPendingDays != null && counts.oldestPendingDays >= 21
+              ? 'warning'
+              : undefined
+          }
         />
       </div>
 
@@ -147,6 +188,11 @@ export default async function LinkedInPage() {
           )}
 
           <SalesNavImport />
+
+          <Card className="p-5">
+            <h2 className="text-sm font-semibold text-ink-900 mb-2">Who accepted</h2>
+            <ConnectionsImport />
+          </Card>
 
           <Card className="p-5">
             <h2 className="text-sm font-semibold text-ink-900 mb-2">Why the caps exist</h2>

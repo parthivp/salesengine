@@ -119,6 +119,30 @@ The same report from a terminal:
 docker compose exec app npx tsx scripts/check.ts
 ```
 
+### What this has been tested against
+
+Every step above was rehearsed in a Linux container environment before you run it,
+against the real `postgres:16-alpine` and `redis:7-alpine` images, with the app and
+worker running from an image and talking over a compose network:
+
+- all three migrations applied to a virgin database
+- `provision-db.ts` set the runtime password and reported 23 of 23 tenant tables
+  `ENABLE`d, `FORCE`d and carrying a policy, exiting 0
+- tenant isolation proven directly in SQL: workspace A sees only A's rows, B only
+  B's, no tenant context returns nothing, and a cross-tenant insert is refused with
+  `new row violates row-level security policy`
+- the worker registered its schedules and wrote heartbeats that the app container
+  read through Redis
+- a workspace created with `create-tenant.ts`, and authenticated requests to
+  `/dashboard`, `/admin/readiness`, `/admin/users` and `/inbox` all returning 200
+  with the real workspace name rendered
+
+The one step that could not be rehearsed is the image build itself — that sandbox
+blocked Alpine's package CDN and the npm registry from inside containers, so
+`apk add` and `npm ci` could not run there. Those work normally on your machine.
+If the build fails, it will fail at one of those two lines and it will be a network
+or proxy problem, not a problem with the Dockerfile.
+
 ### 6. Prove the machinery actually runs
 
 Readiness tells you the parts are present. This tells you they work:

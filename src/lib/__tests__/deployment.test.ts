@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync, existsSync, readdirSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
 import { join } from 'node:path'
 
 /**
@@ -136,6 +137,35 @@ describe('the Dockerfile', () => {
     expect(dockerfile).toContain('CMD ["node", "server.js"]')
     expect(dockerfile).toContain('/app/src ./src')
     expect(dockerfile).toContain('/app/prisma ./prisma')
+  })
+
+  it('only copies paths that exist in a clean clone', () => {
+    // The bug this exists for: `COPY /app/public ./public` referenced a directory
+    // that was empty and therefore untracked, since git does not store empty
+    // directories. Every working tree that had created it locally built fine; a
+    // fresh clone failed with `"/app/public": not found`. Checking the filesystem
+    // is not enough — the question is whether git would reproduce it.
+    const copied = [...dockerfile.matchAll(/^COPY(?:\s+--\S+)*\s+(\S+)\s+\S+$/gm)]
+      .map((m) => m[1])
+      .filter((src) => !src.startsWith('--'))
+      // Two things reach the runner from the builder stage without ever being in
+      // the repo: `.next` is produced by `next build`, and `node_modules` by
+      // `npm ci`. Everything else the builder has, it got from `COPY . .` — so it
+      // must be something a clean clone actually contains.
+      .filter((src) => !/^\/app\/(\.next|node_modules)/.test(src))
+      .map((src) => src.replace(/^\/app\//, ''))
+      .filter((src) => src !== '.' && !src.includes('*'))
+
+    expect(copied.length).toBeGreaterThan(0)
+
+    const tracked = execFileSync('git', ['ls-files'], { cwd: root, encoding: 'utf8' })
+      .split('\n')
+      .filter(Boolean)
+
+    for (const src of copied) {
+      const isTracked = tracked.some((f) => f === src || f.startsWith(`${src}/`))
+      expect(isTracked, `Dockerfile copies "${src}", which no tracked file lives under`).toBe(true)
+    }
   })
 
   it('does not bake a real secret into the image', () => {

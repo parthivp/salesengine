@@ -1,0 +1,9 @@
+# Keeps this directory in git.
+#
+# The Dockerfile does `COPY --from=builder /app/public ./public`, and git does not
+# track empty directories — so on a clean clone the folder did not exist and the
+# image build failed with "/app/public": not found. It built fine in any working
+# tree where the directory happened to have been created locally, which is exactly
+# why it survived testing.
+#
+# Static files served from the site root go here.

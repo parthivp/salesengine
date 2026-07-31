@@ -37,11 +37,22 @@ value is shown once and never again.
 **API permissions** → **Add a permission** → **Microsoft Graph** →
 **Application permissions** (not Delegated — there is no user signed in).
 
-Add **`Mail.Read`**.
+Add **`Mail.Read`** — and **`Mail.Send`** if you want the app to send email as
+well as read replies.
 
 `Mail.ReadBasic.All` is the lower-privileged option and is not enough here: it
 excludes the message body, which the classifier needs to tell an interested reply
 from a decline.
+
+**On `Mail.Send`.** Adding it means sequences send from this mailbox, on your own
+domain, through the same app registration — no Amazon SES account, no domain to
+verify, no sandbox to come out of, and SPF, DKIM and DMARC already correct because
+Microsoft set them up. Leave it off and everything still works except sending: the
+LinkedIn queue, reply detection and connection-acceptance tracking all need only
+`Mail.Read`.
+
+Both permissions are scoped to the single mailbox by step 5, so `Mail.Send` does
+not mean "send as anyone in the organisation" once that policy is in place.
 
 ## 4. Grant admin consent
 
@@ -51,7 +62,8 @@ Until this is done the app authenticates and then gets 403 on every mailbox.
 
 ## 5. Restrict it to one mailbox — do not skip this
 
-As granted, `Mail.Read` lets this app read **every mailbox in your organisation**.
+As granted, these permissions apply to **every mailbox in your organisation** —
+`Mail.Read` reads all of them, and `Mail.Send` can send as any of them.
 That is far more than it needs, and far more than you want sitting in an app
 registration.
 

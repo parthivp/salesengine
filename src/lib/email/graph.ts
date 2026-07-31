@@ -349,3 +349,154 @@ export async function verifyGraphAccess(
   const user = (await res.json()) as { displayName?: string }
   return { ok: true, displayName: user.displayName ?? creds.mailbox }
 }
+
+// ---------------------------------------------------------------------------
+// Sending
+// ---------------------------------------------------------------------------
+
+export type GraphSendResult =
+  | { ok: true; internetMessageId: string }
+  | { ok: false; error: string; retryable: boolean }
+
+/**
+ * Retryable failures, deliberately narrow.
+ *
+ * Throttling and Microsoft's transient service errors are worth another attempt;
+ * a rejected recipient, a revoked permission or a bad secret are not, and retrying
+ * those burns the outbox's attempt budget while guaranteeing the same answer.
+ */
+const RETRYABLE_GRAPH = new Set([
+  'ApplicationThrottled',
+  'ActivityLimitReached',
+  'ServiceNotAvailable',
+  'ServiceUnavailable',
+  'InternalServerError',
+  'UnknownError',
+  'generalException',
+  'quotaLimitReached',
+])
+
+/**
+ * Sends through the same app registration that reads replies.
+ *
+ * Why this exists: the only implemented transport was Amazon SES, and every
+ * other provider fell through to the logger with a warning — so an operator with
+ * Microsoft 365 and no AWS account could configure a mailbox, watch the sequence
+ * engine run, and send nothing at all. The warning was in the worker log, which
+ * is not where anybody looks to find out why no mail arrived.
+ *
+ * Graph is the right transport for that operator rather than a fallback. The mail
+ * leaves their real mailbox on their real domain, which already has SPF, DKIM and
+ * DMARC because Microsoft set them up — no domain to verify, no sandbox to exit,
+ * no reputation to build from nothing. It also lands in the Sent Items folder,
+ * so the thread reads normally to a human who goes looking for it.
+ *
+ * **Two calls, not one.** `sendMail` is a single request but returns nothing, and
+ * Graph will not let anyone set the `Message-ID` header — `internetMessageHeaders`
+ * accepts custom `x-` headers only and rejects the reserved ones. Sending that way
+ * would leave the outbox row holding an id that no sent mail carries, so every
+ * reply would fail `In-Reply-To` matching and fall back to guessing by address and
+ * subject. Creating a draft first returns the id Exchange actually assigned; then
+ * we send the draft. The draft also lands in Sent Items on its own, so the thread
+ * reads normally to a human who goes looking for it.
+ *
+ * Threading a *follow-up* onto an existing thread is not solved here, because the
+ * engine does not currently send one — every sequence step is a fresh message. It
+ * would need `createReply` or an explicit `conversationId`, not a header.
+ */
+export async function sendViaGraph(
+  creds: GraphCredentials,
+  message: {
+    to: string
+    subject: string
+    html: string
+    text?: string
+    /** The id the outbox row was written with, used only if Graph gives us none. */
+    messageId: string
+    inReplyTo?: string | null
+    references?: string | null
+    listUnsubscribeUrl?: string | null
+    replyTo?: string | null
+  }
+): Promise<GraphSendResult> {
+  let token: string
+  try {
+    token = await accessToken(creds)
+  } catch (err) {
+    // A token failure is a configuration problem — an expired secret, consent
+    // revoked — and fails identically on retry.
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : 'Could not get a Graph access token',
+      retryable: false,
+    }
+  }
+
+  const auth = { authorization: `Bearer ${token}`, 'content-type': 'application/json' }
+  const base = `${GRAPH}/users/${encodeURIComponent(creds.mailbox)}`
+
+  // Custom headers only. Graph rejects the reserved ones outright, which is why
+  // threading cannot be done through this field — see the note above.
+  const headers: { name: string; value: string }[] = []
+  if (message.listUnsubscribeUrl) {
+    headers.push({ name: 'x-list-unsubscribe', value: `<${message.listUnsubscribeUrl}>` })
+    headers.push({ name: 'x-list-unsubscribe-post', value: 'List-Unsubscribe=One-Click' })
+  }
+
+  const draftBody = {
+    subject: message.subject,
+    body: { contentType: 'HTML', content: message.html },
+    toRecipients: [{ emailAddress: { address: message.to } }],
+    ...(message.replyTo ? { replyTo: [{ emailAddress: { address: message.replyTo } }] } : {}),
+    ...(headers.length ? { internetMessageHeaders: headers } : {}),
+  }
+
+  // Step 1: create the draft. This is the only response that carries the
+  // Message-ID Exchange assigned.
+  const created = await fetch(`${base}/messages`, {
+    method: 'POST',
+    headers: auth,
+    body: JSON.stringify(draftBody),
+  })
+
+  if (!created.ok) return await graphFailure(created, 'creating the draft')
+
+  const draft = (await created.json()) as { id?: string; internetMessageId?: string }
+  if (!draft.id) {
+    return { ok: false, error: 'Graph created a draft with no id', retryable: false }
+  }
+
+  // Step 2: send it.
+  const sent = await fetch(`${base}/messages/${encodeURIComponent(draft.id)}/send`, {
+    method: 'POST',
+    headers: auth,
+  })
+
+  if (sent.status !== 202 && !sent.ok) {
+    // The draft is still sitting in the mailbox. Deleting it keeps a retry from
+    // leaving a trail of unsent drafts the operator has to clean up by hand.
+    await fetch(`${base}/messages/${encodeURIComponent(draft.id)}`, {
+      method: 'DELETE',
+      headers: auth,
+    }).catch(() => {})
+    return await graphFailure(sent, 'sending the draft')
+  }
+
+  return { ok: true, internetMessageId: draft.internetMessageId ?? message.messageId }
+}
+
+/** Turns a Graph error response into an outcome, preserving the reason. */
+async function graphFailure(res: Response, what: string): Promise<GraphSendResult> {
+  const text = await res.text().catch(() => '')
+  let code = ''
+  try {
+    code = (JSON.parse(text) as { error?: { code?: string } })?.error?.code ?? ''
+  } catch {
+    // Not JSON. The status alone will have to do.
+  }
+  return {
+    ok: false,
+    error: `Graph failed ${what}: ${res.status}${code ? ` (${code})` : ''} ${text.slice(0, 250)}`,
+    retryable: res.status === 429 || res.status >= 500 || RETRYABLE_GRAPH.has(code),
+  }
+}

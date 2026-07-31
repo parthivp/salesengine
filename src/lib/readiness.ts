@@ -141,7 +141,9 @@ export async function assess(tenantId: string): Promise<Readiness> {
       detail: sendingEnabled()
         ? `Live — mail will actually be sent (${env.EMAIL_TRANSPORT}).`
         : `EMAIL_TRANSPORT is "${env.EMAIL_TRANSPORT}", so messages are logged and never sent.`,
-      fix: sendingEnabled() ? undefined : 'Set EMAIL_TRANSPORT=ses once your domain is verified.',
+      fix: sendingEnabled()
+        ? undefined
+        : 'Set EMAIL_TRANSPORT=live once a mailbox is connected. Microsoft 365 mailboxes send through Graph; SES needs a verified domain.',
     })
 
     if (mailboxes.length === 0) {

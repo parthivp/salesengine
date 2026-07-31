@@ -1,6 +1,7 @@
 import { SESv2Client, SendEmailCommand } from '@aws-sdk/client-sesv2'
 import { createHmac, randomUUID } from 'node:crypto'
 import { env } from '../env'
+import { graphCredentialsFrom, sendViaGraph, type GraphCredentials } from './graph'
 import { logger } from '../logger'
 
 /**
@@ -24,6 +25,15 @@ export type OutboundEmail = {
   subject: string
   html: string
   text: string
+  /**
+   * The RFC 5322 Message-ID we generated and stored on the outbox row.
+   *
+   * SES assigns its own and returns it, so it never needed this. Graph does not
+   * return one at all, so a transport that cannot set the header would leave the
+   * outbox holding an id no sent mail carries — and every reply to that thread
+   * would fail In-Reply-To matching and fall back to guessing by address.
+   */
+  messageId?: string
   /** Threading headers so replies land in the same conversation. */
   inReplyTo?: string
   references?: string
@@ -39,7 +49,7 @@ export type SendOutcome =
   | { ok: false; error: string; retryable: boolean }
 
 export interface Transport {
-  readonly key: 'ses' | 'gmail' | 'outlook' | 'smtp' | 'log'
+  readonly key: 'ses' | 'graph' | 'gmail' | 'outlook' | 'smtp' | 'log'
   send(email: OutboundEmail): Promise<SendOutcome>
 }
 
@@ -78,14 +88,19 @@ export function sesConfigured(): boolean {
 /**
  * Real sending must be opted into, not inherited.
  *
- * `EMAIL_TRANSPORT=log` forces the no-op transport; `ses` demands SES and fails
- * loudly if it is unconfigured rather than quietly not sending; `auto` (the
- * default) uses SES when credentials exist.
+ * `EMAIL_TRANSPORT=log` forces the no-op transport and is the kill switch:
+ * whatever a mailbox is configured with, nothing leaves the building. Every other
+ * value permits sending, and *which* transport is then chosen depends on the
+ * mailbox, not on this setting — a Microsoft 365 mailbox sends through Graph and
+ * an SES-backed one through SES, and a deployment can hold both.
+ *
+ * This used to return `sesConfigured()` for anything that was not `log` or `ses`,
+ * which made SES credentials a precondition for sending *any* mail. An operator
+ * with Microsoft 365 and no AWS account had a fully configured mailbox that could
+ * never send, and nothing said so.
  */
 export function sendingEnabled(): boolean {
-  if (env.EMAIL_TRANSPORT === 'log') return false
-  if (env.EMAIL_TRANSPORT === 'ses') return true
-  return sesConfigured()
+  return env.EMAIL_TRANSPORT !== 'log'
 }
 
 /** Throttling and 5xx are worth another attempt; a rejected address is not. */
@@ -165,8 +180,37 @@ export const logTransport: Transport = {
   },
 }
 
-export function transportFor(provider: string): Transport {
+/**
+ * Picks the transport for one mailbox.
+ *
+ * Credentials decide before the provider label does: a mailbox carrying a Graph
+ * app registration sends through Graph whether it is labelled `outlook`, `smtp`
+ * or anything else, because that registration is a positive statement about how
+ * this mailbox works, and the label is only a category.
+ *
+ * Nothing here ever falls back to a *different* sender. Substituting SES for a
+ * mailbox that could not send would put someone else's address in the From line,
+ * which is worse than not sending — so the fallback is always the logger, and it
+ * says so at warn level.
+ */
+export function transportFor(provider: string, credentials?: unknown): Transport {
+  // The kill switch, first and unconditionally. EMAIL_TRANSPORT=log means nothing
+  // leaves the building however well a mailbox is configured, and it is the reason
+  // a test suite or a dev machine can run the whole engine safely.
   if (!sendingEnabled()) return logTransport
+  return resolveTransport(provider, credentials)
+}
+
+/**
+ * Transport selection with the kill switch already decided.
+ *
+ * Separate so the choice can be tested on its own: the suite forces
+ * `EMAIL_TRANSPORT=log`, so a test calling `transportFor` only ever proves the
+ * kill switch works — which is worth proving, and is not what this decides.
+ */
+export function resolveTransport(provider: string, credentials?: unknown): Transport {
+  const graph = credentials ? graphCredentialsFrom(credentials) : null
+  if (graph) return graphTransport(graph)
 
   switch (provider) {
     case 'ses':
@@ -174,12 +218,42 @@ export function transportFor(provider: string): Transport {
     case 'gmail':
     case 'outlook':
     case 'smtp':
-      // Deliberately explicit rather than silently falling back to SES, which
-      // would send from the wrong address.
-      logger.warn({ provider }, 'transport not implemented; using logTransport')
+      logger.warn(
+        { provider },
+        'no transport for this mailbox — connect Microsoft 365 under Mailboxes, or configure SES'
+      )
       return logTransport
     default:
       return logTransport
+  }
+}
+
+/**
+ * Graph transport, bound to one mailbox's credentials.
+ *
+ * A factory rather than a singleton because the credentials belong to the
+ * mailbox: two workspaces, or two mailboxes in one workspace, have different app
+ * registrations, and a shared instance would send the second mailbox's mail from
+ * the first one's address.
+ */
+export function graphTransport(creds: GraphCredentials): Transport {
+  return {
+    key: 'graph',
+    async send(email) {
+      const r = await sendViaGraph(creds, {
+        to: email.to,
+        subject: email.subject,
+        html: email.html,
+        text: email.text,
+        messageId: email.messageId ?? newMessageId(creds.mailbox.split('@')[1] ?? 'localhost'),
+        inReplyTo: email.inReplyTo,
+        references: email.references,
+        listUnsubscribeUrl: email.listUnsubscribeUrl,
+        replyTo: email.replyTo,
+      })
+      if (!r.ok) return { ok: false, error: r.error, retryable: r.retryable }
+      return { ok: true, providerId: r.internetMessageId, messageId: r.internetMessageId }
+    },
   }
 }
 

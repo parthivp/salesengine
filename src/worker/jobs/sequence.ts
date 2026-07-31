@@ -41,6 +41,8 @@ type PreparedSend = {
   messageRowId: string
   email: OutboundEmail
   provider: string
+  /** The mailbox's credential blob — carries the Graph app registration, if any. */
+  credentials: unknown
   mailboxId: string
   contactId: string
   stepId: string
@@ -85,7 +87,7 @@ export async function processEnrollmentStep({
   }
 
   // --- phase 2: the provider call, deliberately outside any transaction ----
-  const transport = transportFor(prepared.provider)
+  const transport = transportFor(prepared.provider, prepared.credentials)
   const outcome = await transport.send(prepared.email)
 
   // --- phase 3: record the result (short transaction) ----------------------
@@ -97,6 +99,10 @@ export async function processEnrollmentStep({
           status: 'sent',
           sentAt: new Date(),
           providerId: outcome.providerId,
+          // Prefer the id the provider actually stamped on the mail. Graph
+          // assigns its own and returns it; storing ours instead would break
+          // In-Reply-To matching on every reply to this message.
+          ...(outcome.messageId ? { messageId: outcome.messageId } : {}),
         },
       })
 
@@ -494,6 +500,7 @@ async function claimAndPrepare(
     kind: 'send',
     messageRowId: messageRow.id,
     provider: mailbox.provider,
+    credentials: mailbox.credentials,
     mailboxId: mailbox.id,
     contactId: contact.id,
     stepId: step.id,
@@ -505,6 +512,9 @@ async function claimAndPrepare(
       html,
       text: finalText,
       listUnsubscribeUrl: unsubUrl,
+      // The same id stored on the outbox row above. Transports that can set the
+      // header must use it, so a reply's In-Reply-To matches what we recorded.
+      messageId: rfcMessageId,
       idempotencyKey: messageRow.id,
       tags: { sequence: sequence.id.slice(0, 40), step: String(step.order) },
     },

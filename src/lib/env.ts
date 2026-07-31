@@ -25,7 +25,10 @@ const schema = z.object({
    * real sending. Tests and local development set 'log'; production sets 'ses'
    * or leaves it on 'auto'.
    */
-  EMAIL_TRANSPORT: z.enum(['auto', 'log', 'ses']).default('auto'),
+  // 'log' is the kill switch — nothing leaves, whatever a mailbox is configured
+  // with. Anything else permits sending, and which transport is used is then a
+  // property of the mailbox: Microsoft 365 goes through Graph, SES through SES.
+  EMAIL_TRANSPORT: z.enum(['auto', 'log', 'ses', 'live']).default('auto'),
 
   AWS_REGION: z.string().default('us-east-1'),
   AWS_ACCESS_KEY_ID: z.string().optional(),

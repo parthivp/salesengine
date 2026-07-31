@@ -170,6 +170,32 @@ function tidyDomain(v: string | undefined): string | undefined {
   )
 }
 
+/**
+ * Fills industry and headcount on an account that already exists.
+ *
+ * Without this, adding the columns would have been useless to anyone who had
+ * already imported once: the account is matched, not created, so the new columns
+ * would be read, mapped, reported as imported, and silently dropped — the same
+ * failure as the wizard's missing fields, one layer down.
+ *
+ * Gaps only. A value already on the record was either curated by a human or set
+ * by enrichment, and a CSV typed from a screen is not evidence enough to overwrite
+ * either.
+ */
+async function backfillAccount(
+  account: { id: string; industry: string | null; employeeCount: number | null },
+  industry: string | undefined,
+  headcount: number | undefined,
+  dryRun: boolean
+): Promise<void> {
+  if (dryRun) return
+  const patch: { industry?: string; employeeCount?: number } = {}
+  if (account.industry == null && industry != null) patch.industry = industry
+  if (account.employeeCount == null && headcount != null) patch.employeeCount = headcount
+  if (Object.keys(patch).length === 0) return
+  await db().account.update({ where: { id: account.id }, data: patch })
+}
+
 export async function importSalesNav(opts: {
   rows: Record<string, string>[]
   mapping: Partial<Record<SalesNavField, string>>
@@ -246,6 +272,9 @@ export async function importSalesNav(opts: {
           where: { linkedinUrl: { contains: normalized, mode: 'insensitive' } },
         })) ?? (email ? await db().contact.findFirst({ where: { email } }) : null)
 
+      const domain = tidyDomain(d.companyDomain) ?? (email ? domainFromEmail(email) ?? undefined : undefined)
+      const headcount = parseHeadcount(d.employeeCount)
+
       if (existing) {
         result.duplicates++
         if (!dryRun) {
@@ -258,6 +287,29 @@ export async function importSalesNav(opts: {
           if (Object.keys(patch).length) {
             await db().contact.update({ where: { id: existing.id }, data: patch })
           }
+
+          // The company still gets looked at. Re-importing the same list with
+          // Industry and Headcount added is the realistic way those columns get
+          // used — you import, see thin drafts, add the columns, import again —
+          // and this branch used to `continue` straight past the account, so the
+          // second import reported success and changed nothing that mattered.
+          const known = domain
+            ? await db().account.findFirst({ where: { domain } })
+            : d.companyName
+              ? await db().account.findFirst({
+                  where: { name: { equals: d.companyName, mode: 'insensitive' } },
+                })
+              : null
+          if (known) {
+            await backfillAccount(known, d.industry, headcount, dryRun)
+            if (!existing.accountId) {
+              await db().contact.update({
+                where: { id: existing.id },
+                data: { accountId: known.id },
+              })
+            }
+          }
+
           if (listId) {
             await db().contactListMember.upsert({
               where: { listId_contactId: { listId, contactId: existing.id } },
@@ -275,17 +327,16 @@ export async function importSalesNav(opts: {
         continue
       }
 
-      const domain = tidyDomain(d.companyDomain) ?? (email ? domainFromEmail(email) ?? undefined : undefined)
-      const headcount = parseHeadcount(d.employeeCount)
-
       let accountId: string | null = null
       if (domain) {
         const cached = accountCache.get(domain)
         if (cached) accountId = cached
         else {
           const found = await db().account.findFirst({ where: { domain } })
-          if (found) accountId = found.id
-          else {
+          if (found) {
+            accountId = found.id
+            await backfillAccount(found, d.industry, headcount, dryRun)
+          } else {
             const created = await db().account.create({
               data: {
                 tenantId: tid(), name: d.companyName ?? domain, domain, country: d.country,
@@ -303,8 +354,10 @@ export async function importSalesNav(opts: {
         const found = await db().account.findFirst({
           where: { name: { equals: d.companyName, mode: 'insensitive' } },
         })
-        if (found) accountId = found.id
-        else {
+        if (found) {
+          accountId = found.id
+          await backfillAccount(found, d.industry, headcount, dryRun)
+        } else {
           const created = await db().account.create({
             data: {
               tenantId: tid(), name: d.companyName, country: d.country,

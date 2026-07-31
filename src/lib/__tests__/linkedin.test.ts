@@ -470,6 +470,61 @@ https://linkedin.com/in/borongliu,Borong,Zhong Lun Law Firm,zhonglun.com,Legal s
     expect(contact.accountId).toBe(account.id)
   })
 
+  it('backfills industry and headcount onto a company imported earlier', async () => {
+    // The realistic case: you import once without the columns, notice the drafts
+    // are thin, add the columns and re-import. The account already exists, so it
+    // is matched rather than created — and without a backfill the new values are
+    // read, mapped, reported as imported, and dropped.
+    const first = parseSalesNav(
+      `Profile URL,First Name,Company,Company Domain\nhttps://linkedin.com/in/borongliu,Borong,Zhong Lun Law Firm,zhonglun.com\n`
+    )
+    await withTenant(tenantId, () => importSalesNav({ rows: first.rows, mapping: first.suggested }))
+
+    const before = await owner.account.findFirstOrThrow({ where: { tenantId, domain: 'zhonglun.com' } })
+    expect(before.industry).toBeNull()
+
+    const second = parseSalesNav(
+      `Profile URL,First Name,Company,Company Domain,Industry,Headcount
+https://linkedin.com/in/borongliu,Borong,Zhong Lun Law Firm,zhonglun.com,Legal services,2500
+`
+    )
+    await withTenant(tenantId, () => importSalesNav({ rows: second.rows, mapping: second.suggested }))
+
+    const after = await owner.account.findUniqueOrThrow({ where: { id: before.id } })
+    expect(after.industry).toBe('Legal services')
+    expect(after.employeeCount).toBe(2500)
+  })
+
+  it('does not overwrite a company field that is already set', async () => {
+    const account = await owner.account.create({
+      data: { tenantId, name: 'Curated', domain: 'curated.test', industry: 'Legal tech' },
+    })
+    const p = parseSalesNav(
+      `Profile URL,First Name,Company,Company Domain,Industry,Headcount
+https://linkedin.com/in/someone,Sam,Curated,curated.test,Something else,900
+`
+    )
+    await withTenant(tenantId, () => importSalesNav({ rows: p.rows, mapping: p.suggested }))
+
+    const after = await owner.account.findUniqueOrThrow({ where: { id: account.id } })
+    expect(after.industry).toBe('Legal tech')
+    expect(after.employeeCount).toBe(900) // the gap is still filled
+  })
+
+  it('a dry run does not backfill either', async () => {
+    const account = await owner.account.create({
+      data: { tenantId, name: 'Preview Co', domain: 'preview.test' },
+    })
+    const p = parseSalesNav(
+      `Profile URL,First Name,Company,Company Domain,Industry\nhttps://linkedin.com/in/x,X,Preview Co,preview.test,Legal services\n`
+    )
+    await withTenant(tenantId, () =>
+      importSalesNav({ rows: p.rows, mapping: p.suggested, dryRun: true })
+    )
+    const after = await owner.account.findUniqueOrThrow({ where: { id: account.id } })
+    expect(after.industry).toBeNull()
+  })
+
   it('reads headcount the way people actually write it', () => {
     expect(parseHeadcount('2,500')).toBe(2500)
     expect(parseHeadcount('51-200')).toBe(51) // a band takes its lower bound

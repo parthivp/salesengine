@@ -86,6 +86,19 @@ describe('the runtime database role', () => {
   })
 })
 
+describe('outbound network from the containers', () => {
+  // Microsoft's endpoints publish AAAA records; Node 18+ does not prefer IPv4;
+  // Docker Desktop gives containers no IPv6 route. The three together make every
+  // Graph call fail with ENETUNREACH, reported as a bare "fetch failed" that
+  // implicates the credentials instead. Both processes talk to Graph — the app
+  // when verifying a mailbox, the worker on every poll and send — so both need it.
+  for (const service of ['app', 'worker'] as const) {
+    it(`${service} resolves IPv4 first, so Graph is reachable on Docker Desktop`, () => {
+      expect(envFor(service).NODE_OPTIONS ?? '').toContain('--dns-result-order=ipv4first')
+    })
+  }
+})
+
 describe('the provisioning script', () => {
   const script = readFileSync(join(root, 'scripts/provision-db.ts'), 'utf8')
 

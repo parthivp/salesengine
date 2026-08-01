@@ -77,6 +77,16 @@ services:
       DIRECT_DATABASE_URL: postgresql://salesengine:${POSTGRES_PASSWORD:-salesengine}@postgres:5432/salesengine?schema=public
       REDIS_URL: redis://redis:6379
       PORT: '3000'
+      # Prefer IPv4 when resolving.
+      #
+      # Microsoft's endpoints (login.microsoftonline.com, graph.microsoft.com)
+      # publish AAAA records. Node 18+ returns addresses in resolver order rather
+      # than IPv4-first, and Docker Desktop gives containers no IPv6 route by
+      # default — so the first connection attempt goes to an IPv6 address that
+      # cannot be reached and fails with ENETUNREACH, surfaced as a bare
+      # "fetch failed". Nothing about the credentials is wrong and nothing in the
+      # error says so.
+      NODE_OPTIONS: --dns-result-order=ipv4first
     ports:
       - '${APP_PORT:-3000}:3000'
     depends_on:
@@ -103,6 +113,16 @@ services:
       # and every mailbox to poll, across all workspaces.
       DIRECT_DATABASE_URL: postgresql://salesengine:${POSTGRES_PASSWORD:-salesengine}@postgres:5432/salesengine?schema=public
       REDIS_URL: redis://redis:6379
+      # Prefer IPv4 when resolving.
+      #
+      # Microsoft's endpoints (login.microsoftonline.com, graph.microsoft.com)
+      # publish AAAA records. Node 18+ returns addresses in resolver order rather
+      # than IPv4-first, and Docker Desktop gives containers no IPv6 route by
+      # default — so the first connection attempt goes to an IPv6 address that
+      # cannot be reached and fails with ENETUNREACH, surfaced as a bare
+      # "fetch failed". Nothing about the credentials is wrong and nothing in the
+      # error says so.
+      NODE_OPTIONS: --dns-result-order=ipv4first
     depends_on:
       migrate:
         condition: service_completed_successfully

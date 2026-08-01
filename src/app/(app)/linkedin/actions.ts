@@ -10,6 +10,7 @@ import { assessPacing, withinLimit, type LinkedInActionType } from '@/lib/linked
 import { audit } from '@/lib/audit'
 import { enqueue } from '@/lib/queue'
 import { apolloEnabled, isStale } from '@/lib/apollo'
+import { rewriteDraft, rewriteEnabled, unsupportedClaims } from '@/lib/ai/rewrite'
 import { importConnections, type ConnectionsResult } from '@/lib/linkedin/connections'
 import { logger } from '@/lib/logger'
 
@@ -260,5 +261,99 @@ export async function runConnectionsImport(input: {
   } catch (err) {
     logger.error({ err }, 'connections import failed')
     return { ok: false, error: err instanceof Error ? err.message : 'Import failed.' }
+  }
+}
+
+const improveSchema = z.object({
+  contactId: z.string().min(1),
+  rough: z.string().trim().min(1).max(4000),
+  kind: z.enum(['connect', 'message']),
+  limit: z.number().int().min(50).max(8000),
+})
+
+/**
+ * Rewrites the rep's rough words into something sendable.
+ *
+ * The history is gathered here rather than asked of the rep, because the point of
+ * doing it in the app instead of in a chat window is that the app already knows
+ * what was sent, to whom, and when. Pasting that into ChatGPT by hand is the work
+ * this removes.
+ */
+export async function improveDraft(
+  input: z.input<typeof improveSchema>
+): Promise<Result<{ text: string; unsupported: string[] }>> {
+  const auth = await requireAuth()
+  const parsed = improveSchema.safeParse(input)
+  if (!parsed.success) {
+    return { ok: false, error: parsed.error.issues[0]?.message ?? 'Invalid input.' }
+  }
+  if (!rewriteEnabled()) {
+    return { ok: false, error: 'No OpenAI key configured. Add OPENAI_API_KEY to .env and restart.' }
+  }
+  const d = parsed.data
+
+  try {
+    const context = await withTenant(auth.tenant.id, async () => {
+      const contact = await db().contact.findUniqueOrThrow({
+        where: { id: d.contactId },
+        include: { account: { select: { name: true, industry: true, employeeCount: true } } },
+      })
+
+      // What this person has already been sent. Anything else is a repeat.
+      const priorTasks = await db().task.findMany({
+        where: { contactId: d.contactId, type: 'linkedin', outcome: 'sent' },
+        orderBy: { completedAt: 'asc' },
+        select: { payload: true },
+        take: 10,
+      })
+      const priorToContact = priorTasks
+        .map((t) => (t.payload as { sentText?: string } | null)?.sentText)
+        .filter((x): x is string => Boolean(x))
+
+      // And what other people were sent recently, so this one does not echo them.
+      const others = await db().task.findMany({
+        where: { type: 'linkedin', outcome: 'sent', contactId: { not: d.contactId } },
+        orderBy: { completedAt: 'desc' },
+        select: { payload: true },
+        take: 10,
+      })
+      const recentToOthers = others
+        .map((t) => (t.payload as { sentText?: string } | null)?.sentText)
+        .filter((x): x is string => Boolean(x))
+
+      return { contact, priorToContact, recentToOthers }
+    })
+
+    const { contact } = context
+    const req = {
+      rough: d.rough,
+      kind: d.kind,
+      limit: d.limit,
+      facts: {
+        firstName: contact.firstName,
+        title: contact.title,
+        company: contact.account?.name ?? null,
+        industry: contact.account?.industry ?? null,
+        employeeCount: contact.account?.employeeCount ?? null,
+        city: contact.city,
+        emailedAlready: Boolean(contact.lastContactedAt),
+        repliedAlready: Boolean(contact.lastRepliedAt),
+        connectedOnLinkedIn: Boolean(contact.linkedinConnectedAt),
+      },
+      priorToContact: context.priorToContact,
+      recentToOthers: context.recentToOthers,
+      senderName: auth.user.name.split(' ')[0],
+    }
+
+    const r = await rewriteDraft(req)
+    if (!r.ok) return { ok: false, error: r.error }
+
+    // Surfaced, not silently stripped. The rep is the one who knows whether a
+    // number is real, and a rewrite that quietly drops a true detail is its own
+    // kind of wrong.
+    return { ok: true, data: { text: r.text, unsupported: unsupportedClaims(r.text, req) } }
+  } catch (err) {
+    logger.error({ err }, 'improve draft failed')
+    return { ok: false, error: err instanceof Error ? err.message : 'Could not rewrite that.' }
   }
 }

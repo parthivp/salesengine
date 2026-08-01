@@ -36,6 +36,11 @@ const schema = z.object({
   SES_CONFIGURATION_SET: z.string().optional(),
 
   APOLLO_API_KEY: z.string().optional(),
+
+  // Rewriting drafts. Optional throughout: without a key the Improve button is
+  // absent and every other part of drafting works exactly as before.
+  OPENAI_API_KEY: z.string().optional(),
+  OPENAI_MODEL: z.string().default('gpt-4o-mini'),
   SALESFORCE_CLIENT_ID: z.string().optional(),
   SALESFORCE_CLIENT_SECRET: z.string().optional(),
 })

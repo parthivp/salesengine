@@ -5,6 +5,7 @@ import { formatNumber } from '@/lib/utils'
 import { buildQueue } from '@/lib/linkedin/queue'
 import { DAILY_CEILINGS, ACTION_LABEL } from '@/lib/linkedin/policy'
 import { Linkedin, ShieldCheck } from 'lucide-react'
+import { rewriteEnabled } from '@/lib/ai/rewrite'
 import { QueueCards, BuildListButton, SalesNavImport, EnrichButton, ConnectionsImport } from './client'
 
 export const metadata = { title: 'LinkedIn queue · SalesEngine' }
@@ -175,7 +176,11 @@ export default async function LinkedInPage() {
               />
             </Card>
           ) : (
-            <QueueCards cards={serialised} canSend={pacing.connect.allowed} />
+            <QueueCards
+              cards={serialised}
+              canSend={pacing.connect.allowed}
+              canImprove={rewriteEnabled()}
+            />
           )}
         </div>
 

@@ -6,6 +6,7 @@ import { lintContent } from '@/lib/email/deliverability'
 import { AVAILABLE_TAGS, unknownTags } from '@/lib/email/merge'
 import { Mail } from 'lucide-react'
 import { TemplateComposer } from './composer'
+import { rewriteEnabled } from '@/lib/ai/rewrite'
 
 export const metadata = { title: 'Templates · SalesEngine' }
 export const dynamic = 'force-dynamic'
@@ -26,7 +27,7 @@ export default async function TemplatesPage() {
 
       <div className="grid gap-6 lg:grid-cols-5">
         <div className="lg:col-span-3">
-          <TemplateComposer />
+          <TemplateComposer canImprove={rewriteEnabled()} />
         </div>
 
         <div className="lg:col-span-2 space-y-6">

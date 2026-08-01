@@ -237,6 +237,16 @@ export async function assess(tenantId: string): Promise<Readiness> {
     })
 
     add({
+      id: 'rewrite',
+      area: 'Data',
+      label: 'Draft rewriting',
+      severity: 'info',
+      detail: env.OPENAI_API_KEY
+        ? `On (${env.OPENAI_MODEL}) — the "Write it my way" box is available on LinkedIn cards and templates.`
+        : 'No OpenAI key, so drafts are rule-composed only. Add OPENAI_API_KEY to turn on rewriting.',
+    })
+
+    add({
       id: 'enrichment',
       area: 'Data',
       label: 'Enrichment',

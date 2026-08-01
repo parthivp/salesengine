@@ -8,9 +8,11 @@ import { Card, Badge } from '@/components/ui'
 import { cn, formatNumber } from '@/lib/utils'
 import {
   ExternalLink, Copy, Check, SkipForward, UserCheck, Ban,
-  Upload, FileSpreadsheet, AlertTriangle, ListPlus, Sparkles,
+  Upload, FileSpreadsheet, AlertTriangle, ListPlus, Sparkles, Wand2,
 } from 'lucide-react'
-import { record, buildTargetList, runSalesNavImport, enrichQueueAccounts, runConnectionsImport } from './actions'
+import {
+  record, buildTargetList, runSalesNavImport, enrichQueueAccounts, runConnectionsImport, improveDraft,
+} from './actions'
 import { SALESNAV_FIELDS, SALESNAV_ALIASES } from '@/lib/linkedin/fields'
 
 type Check = { severity: string; message: string }
@@ -32,18 +34,24 @@ export type Card = {
   rationale: string[]
 }
 
-export function QueueCards({ cards, canSend }: { cards: Card[]; canSend: boolean }) {
+export function QueueCards({
+  cards, canSend, canImprove,
+}: { cards: Card[]; canSend: boolean; canImprove: boolean }) {
   return (
     <ul className="space-y-4">
       {cards.map((c) => (
-        <QueueCard key={c.taskId} card={c} canSend={canSend} />
+        <QueueCard key={c.taskId} card={c} canSend={canSend} canImprove={canImprove} />
       ))}
     </ul>
   )
 }
 
-function QueueCard({ card, canSend }: { card: Card; canSend: boolean }) {
+function QueueCard({ card, canSend, canImprove }: { card: Card; canSend: boolean; canImprove: boolean }) {
   const [text, setText] = useState(card.text)
+  const [improving, setImproving] = useState(false)
+  const [rough, setRough] = useState('')
+  const [improveError, setImproveError] = useState<string | null>(null)
+  const [unsupported, setUnsupported] = useState<string[]>([])
   const [copied, setCopied] = useState(false)
   const [done, setDone] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -62,6 +70,29 @@ function QueueCard({ card, canSend }: { card: Card; canSend: boolean }) {
       })
       if (!r.ok) setError(r.error)
       else setDone(outcome)
+    })
+  }
+
+  function improve() {
+    setImproveError(null)
+    setUnsupported([])
+    startTransition(async () => {
+      const r = await improveDraft({
+        contactId: card.contactId,
+        rough,
+        kind: card.action === 'message' ? 'message' : 'connect',
+        limit: card.limit,
+      })
+      if (!r.ok) {
+        setImproveError(r.error)
+        return
+      }
+      // Replaces the draft rather than opening a preview: the textarea below is
+      // already the edit surface, and a second one would just be a step to click
+      // through.
+      setText(r.data!.text)
+      setUnsupported(r.data!.unsupported)
+      setImproving(false)
     })
   }
 
@@ -126,9 +157,58 @@ function QueueCard({ card, canSend }: { card: Card; canSend: boolean }) {
       </div>
 
       <div className="p-5">
-        <label htmlFor={`draft-${card.taskId}`} className="block text-xs font-medium text-ink-600 mb-1.5">
-          Draft — edit it before you send
-        </label>
+        <div className="flex items-center justify-between gap-2 mb-1.5">
+          <label htmlFor={`draft-${card.taskId}`} className="block text-xs font-medium text-ink-600">
+            Draft — edit it before you send
+          </label>
+          {canImprove && (
+            <button
+              onClick={() => setImproving((v) => !v)}
+              className="inline-flex items-center gap-1 text-xs text-brand-700 hover:text-brand-800"
+            >
+              <Wand2 className="h-3 w-3" />
+              {improving ? 'Hide' : 'Write it my way'}
+            </button>
+          )}
+        </div>
+
+        {improving && (
+          <div className="mb-3 rounded-lg border border-brand-200 bg-brand-50/40 p-3">
+            <label htmlFor={`rough-${card.taskId}`} className="block text-xs text-ink-600 mb-1.5">
+              {/* Explicitly not "write a good message". The whole point is that it
+                  does not have to be good, or even grammatical. */}
+              Say what you want to get across — rough is fine, any English is fine
+            </label>
+            <textarea
+              id={`rough-${card.taskId}`}
+              value={rough}
+              onChange={(e) => setRough(e.target.value)}
+              rows={3}
+              placeholder="e.g. we make software for legal teams, saw he built a court reporting tool, want to compare notes not sell"
+              className="w-full rounded-lg border border-ink-200 px-3 py-2 text-sm outline-none focus:border-brand-500"
+            />
+            <div className="mt-2 flex items-center gap-2">
+              <button
+                onClick={improve}
+                disabled={pending || !rough.trim()}
+                className="rounded-lg bg-brand-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-brand-700 disabled:opacity-50 transition"
+              >
+                {pending ? 'Writing…' : 'Improve'}
+              </button>
+              <span className="text-xs text-ink-400">
+                Uses what you have already sent, so it does not repeat you
+              </span>
+            </div>
+            {improveError && <p className="mt-2 text-xs text-red-700">{improveError}</p>}
+            {unsupported.length > 0 && (
+              <p className="mt-2 text-xs text-amber-800">
+                {/* Surfaced rather than stripped: the rep knows whether it is true. */}
+                Check {unsupported.join(', ')} — {unsupported.length === 1 ? 'that figure is' : 'those figures are'}{' '}
+                not on the record or in your notes.
+              </p>
+            )}
+          </div>
+        )}
         <textarea
           id={`draft-${card.taskId}`}
           value={text}

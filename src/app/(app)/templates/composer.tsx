@@ -3,8 +3,8 @@
 import { useState, useTransition, useEffect } from 'react'
 import { Card, Badge } from '@/components/ui'
 import { cn } from '@/lib/utils'
-import { Eye, Save, AlertTriangle, CheckCircle2 } from 'lucide-react'
-import { saveTemplate, previewTemplate, type PreviewResult } from './actions'
+import { Eye, Save, AlertTriangle, CheckCircle2, Wand2 } from 'lucide-react'
+import { saveTemplate, previewTemplate, improveTemplate, type PreviewResult } from './actions'
 
 const STARTER_SUBJECT = 'Quick question about {{company}}'
 const STARTER_BODY = `Hi {{first_name | there}},
@@ -15,8 +15,11 @@ Worth a short call to compare notes?
 
 {{sender_first_name}}`
 
-export function TemplateComposer() {
+export function TemplateComposer({ canImprove }: { canImprove: boolean }) {
   const [name, setName] = useState('')
+  const [improving, setImproving] = useState(false)
+  const [rough, setRough] = useState('')
+  const [improveError, setImproveError] = useState<string | null>(null)
   const [subject, setSubject] = useState(STARTER_SUBJECT)
   const [body, setBody] = useState(STARTER_BODY)
   const [preview, setPreview] = useState<PreviewResult | null>(null)
@@ -50,6 +53,23 @@ export function TemplateComposer() {
     return () => clearTimeout(t)
   }, [subject, body])
 
+  function improve() {
+    setImproveError(null)
+    startTransition(async () => {
+      const r = await improveTemplate({ rough })
+      if (!r.ok) {
+        setImproveError(r.error)
+        return
+      }
+      // Only replace the subject if the model produced one — an operator who has
+      // already written a subject they like should not lose it.
+      if (r.subject) setSubject(r.subject)
+      setBody(r.text)
+      setSaved(false)
+      setImproving(false)
+    })
+  }
+
   function save() {
     setError(null)
     startTransition(async () => {
@@ -68,6 +88,46 @@ export function TemplateComposer() {
 
   return (
     <div className="space-y-4">
+      {canImprove && (
+        <Card className="p-4">
+          <button
+            onClick={() => setImproving((v) => !v)}
+            className="inline-flex items-center gap-1.5 text-sm font-medium text-brand-700 hover:text-brand-800"
+          >
+            <Wand2 className="h-4 w-4" />
+            {improving ? 'Hide' : 'Write it my way'}
+          </button>
+
+          {improving && (
+            <div className="mt-3">
+              <label htmlFor="rough-template" className="block text-xs text-ink-600 mb-1.5">
+                Say what this email should get across — rough is fine, any English is fine
+              </label>
+              <textarea
+                id="rough-template"
+                value={rough}
+                onChange={(e) => setRough(e.target.value)}
+                rows={4}
+                placeholder="e.g. first email to legal tech founders, we build software for legal teams, ask if they want to compare notes on court reporting workflows, not a pitch"
+                className="w-full rounded-lg border border-ink-200 px-3 py-2 text-sm outline-none focus:border-brand-500"
+              />
+              <div className="mt-2 flex items-center gap-2">
+                <button
+                  onClick={improve}
+                  disabled={pending || !rough.trim()}
+                  className="rounded-lg bg-brand-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-brand-700 disabled:opacity-50 transition"
+                >
+                  {pending ? 'Writing…' : 'Improve'}
+                </button>
+                <span className="text-xs text-ink-400">
+                  Merge tags are kept as tags — the engine fills them per recipient
+                </span>
+              </div>
+              {improveError && <p className="mt-2 text-xs text-red-700">{improveError}</p>}
+            </div>
+          )}
+        </Card>
+      )}
       <Card>
         <div className="px-5 py-4 border-b border-ink-200">
           <h2 className="text-sm font-semibold text-ink-900">Compose</h2>

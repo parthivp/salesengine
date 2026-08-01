@@ -7,6 +7,7 @@ import { withTenant, db, tid } from '@/lib/db'
 import { lintContent, type LintResult } from '@/lib/email/deliverability'
 import { render, valuesFor, unknownTags } from '@/lib/email/merge'
 import { audit } from '@/lib/audit'
+import { rewriteDraft, rewriteEnabled } from '@/lib/ai/rewrite'
 
 const schema = z.object({
   name: z.string().trim().min(2).max(120),
@@ -122,4 +123,45 @@ export async function previewTemplate(input: {
     unresolved: [...new Set([...subject.unresolved, ...body.unresolved])],
     unknown: unknownTags(`${input.subject} ${input.bodyText}`),
   }
+}
+
+const improveSchema = z.object({
+  rough: z.string().trim().min(1).max(4000),
+  subject: z.string().max(500).optional(),
+})
+
+/**
+ * Rewrites a rough email into a sendable template.
+ *
+ * Different from the LinkedIn card in one important way: a template is not
+ * addressed to anybody. So the facts it may use are the merge tags, not one
+ * contact's record — and the instruction is to leave those tags intact rather
+ * than resolve them, since the engine fills them per recipient at send time.
+ */
+export async function improveTemplate(
+  input: z.input<typeof improveSchema>
+): Promise<{ ok: true; subject?: string; text: string } | { ok: false; error: string }> {
+  await requirePermission('template:create')
+  const parsed = improveSchema.safeParse(input)
+  if (!parsed.success) return { ok: false, error: 'Write a rough version first.' }
+  if (!rewriteEnabled()) {
+    return { ok: false, error: 'No OpenAI key configured. Add OPENAI_API_KEY to .env and restart.' }
+  }
+
+  const r = await rewriteDraft({
+    rough:
+      `${parsed.data.rough}\n\n` +
+      'Write this as a reusable template. Where you would name the person or their ' +
+      'company, use the merge tags {{first_name}} and {{company}} exactly as written — ' +
+      'do not invent a name. Available tags: {{first_name}}, {{last_name}}, {{company}}, ' +
+      '{{title}}, {{sender_first_name}}. Use no others.',
+    kind: 'email',
+    limit: 1600,
+    // A template has no single recipient, so there is nothing on record to ground
+    // it in. The merge tags are the only stand-in, and they are named above.
+    facts: {},
+  })
+
+  if (!r.ok) return { ok: false, error: r.error }
+  return { ok: true, text: r.text, subject: r.subject }
 }

@@ -86,6 +86,36 @@ describe('the runtime database role', () => {
   })
 })
 
+describe('the base image', () => {
+  const dockerfile = readFileSync(join(root, 'Dockerfile'), 'utf8')
+
+  it('is glibc, because musl cannot resolve Microsoft to IPv4', () => {
+    // musl returned only AAAA records for login.microsoftonline.com, and Docker
+    // Desktop gives containers no IPv6 route — so every Graph call failed with
+    // ENETUNREACH. No Node flag fixes it: there were no IPv4 addresses to prefer.
+    expect(dockerfile).not.toMatch(/FROM node:\d+-alpine/)
+    expect(dockerfile).toMatch(/FROM node:\d+-slim/)
+  })
+
+  it('points the entrypoint at tini where this base actually puts it', () => {
+    // Alpine ships tini at /sbin/tini, Debian at /usr/bin/tini. Getting this
+    // wrong does not fail the build — it fails at container start, every time,
+    // with an exec error and no application logs at all.
+    const usesApt = /apt-get install[^\n]*\btini\b/.test(dockerfile)
+    const usesApk = /apk add[^\n]*\btini\b/.test(dockerfile)
+    expect(usesApt !== usesApk, 'exactly one package manager should install tini').toBe(true)
+
+    const entrypoint = /ENTRYPOINT \["([^"]+)"/.exec(dockerfile)?.[1]
+    expect(entrypoint).toBe(usesApt ? '/usr/bin/tini' : '/sbin/tini')
+  })
+
+  it('does not install the Alpine-only glibc shim on a glibc base', () => {
+    // libc6-compat exists to fake glibc on musl. On Debian it is meaningless,
+    // and leaving it behind is the sign of a half-finished migration.
+    expect(dockerfile).not.toContain('libc6-compat')
+  })
+})
+
 describe('outbound network from the containers', () => {
   // Microsoft's endpoints publish AAAA records; Node 18+ does not prefer IPv4;
   // Docker Desktop gives containers no IPv6 route. The three together make every

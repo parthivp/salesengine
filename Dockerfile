@@ -1,16 +1,37 @@
 # syntax=docker/dockerfile:1
 
+# Debian slim rather than Alpine, deliberately.
+#
+# Alpine uses musl, and musl's resolver returned *only* AAAA records for
+# `login.microsoftonline.com` — no IPv4 addresses at all. Docker Desktop gives
+# containers no IPv6 route, so every call to Entra and Graph failed with
+# ENETUNREACH, surfacing as a bare "fetch failed" on the mailbox connect screen
+# and implicating credentials that were correct.
+#
+# Nothing above the resolver could fix it, and all of it was tried:
+# `--dns-result-order=ipv4first` had no IPv4 addresses to reorder;
+# `--no-network-family-autoselection` had nothing to fall back to; disabling IPv6
+# in the container's network namespace did not change what musl returned. glibc
+# resolves the same name to IPv4 and the problem disappears.
+#
+# The cost is a larger image — roughly 150 MB against 50 — which is a bad trade
+# only if the smaller one works.
+
 # ---- deps -------------------------------------------------------------------
-FROM node:22-alpine AS deps
+FROM node:22-slim AS deps
 WORKDIR /app
-RUN apk add --no-cache libc6-compat openssl
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends openssl ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
 COPY package.json package-lock.json ./
 RUN npm ci
 
 # ---- builder ----------------------------------------------------------------
-FROM node:22-alpine AS builder
+FROM node:22-slim AS builder
 WORKDIR /app
-RUN apk add --no-cache libc6-compat openssl
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends openssl ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
@@ -25,13 +46,17 @@ RUN npx prisma generate
 RUN npm run build
 
 # ---- runner -----------------------------------------------------------------
-FROM node:22-alpine AS runner
+FROM node:22-slim AS runner
 WORKDIR /app
-RUN apk add --no-cache libc6-compat openssl tini
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends openssl ca-certificates tini \
+ && rm -rf /var/lib/apt/lists/*
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 
-RUN addgroup -g 1001 -S nodejs && adduser -S nextjs -u 1001
+# The node images already ship a `node` user at uid 1000, so 1001 is free.
+RUN groupadd --gid 1001 nodejs \
+ && useradd --uid 1001 --gid nodejs --create-home --shell /usr/sbin/nologin nextjs
 
 # Next standalone output: server.js plus only the modules it actually needs.
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
@@ -53,5 +78,6 @@ USER nextjs
 EXPOSE 3000
 ENV PORT=3000 HOSTNAME=0.0.0.0
 
-ENTRYPOINT ["/sbin/tini", "--"]
+# Debian puts tini in /usr/bin; Alpine put it in /sbin.
+ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["node", "server.js"]

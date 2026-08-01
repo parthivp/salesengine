@@ -248,7 +248,7 @@ export async function importSalesNav(opts: {
       result.errors.push({
         row: rowNumber,
         profile: d.linkedinUrl,
-        reason: 'Not a recognisable linkedin.com/in/ profile URL',
+        reason: 'Not a recognisable LinkedIn profile URL — expected linkedin.com/in/… or a Sales Navigator lead link',
       })
       result.skipped++
       continue

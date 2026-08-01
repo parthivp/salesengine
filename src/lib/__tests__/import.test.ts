@@ -282,3 +282,35 @@ describe('scoring — junior titles', () => {
     expect(vp.total).toBeGreaterThan(50)
   })
 })
+
+describe('Sales Navigator lead URLs', () => {
+  /**
+   * A saved Sales Navigator page never mentions the public /in/ URL — the lead URN
+   * is the only identifier it carries. Rejecting it would mean nothing parsed out
+   * of Sales Navigator could be imported at all.
+   */
+  it('accepts a lead link as a profile URL', () => {
+    expect(normalizeLinkedIn('https://www.linkedin.com/sales/lead/ACwAAB123')).toBe(
+      'linkedin.com/sales/lead/ACwAAB123'
+    )
+  })
+
+  it('drops the search context, which differs between searches for the same person', () => {
+    // ".../ACwAAB123,NAME_SEARCH,u8r5" — keeping the suffix would defeat dedupe,
+    // because the same person found twice would produce two different keys.
+    expect(normalizeLinkedIn('https://www.linkedin.com/sales/lead/ACwAAB123,NAME_SEARCH,u8r5')).toBe(
+      'linkedin.com/sales/lead/ACwAAB123'
+    )
+  })
+
+  it('keeps the case of the lead id, which is significant', () => {
+    expect(normalizeLinkedIn('https://www.linkedin.com/sales/lead/ACwAAaBc')).toBe(
+      'linkedin.com/sales/lead/ACwAAaBc'
+    )
+  })
+
+  it('still rejects a company page or a bare linkedin.com link', () => {
+    expect(normalizeLinkedIn('https://www.linkedin.com/company/acme')).toBeNull()
+    expect(normalizeLinkedIn('https://www.linkedin.com/')).toBeNull()
+  })
+})

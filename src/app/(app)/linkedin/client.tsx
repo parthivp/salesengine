@@ -449,6 +449,16 @@ export function SalesNavImport() {
           generic importer would reject every row. Sales Navigator has no export, so build the
           file by hand or from an enrichment provider.
         </p>
+        {/* The other way in, and usually the faster one: a saved page needs no
+            typing at all. Offered here rather than on its own tab because this is
+            where somebody stands when they are wondering how to get a list in. */}
+        <p className="mt-2 text-xs text-ink-500">
+          Or{' '}
+          <Link href="/linkedin/paste" className="font-medium text-brand-700 underline underline-offset-2">
+            read a page you saved from Sales Navigator
+          </Link>{' '}
+          — no typing, and it reads a whole results list at once.
+        </p>
       </div>
 
       <div className="p-5">

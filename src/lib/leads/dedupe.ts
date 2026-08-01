@@ -45,10 +45,38 @@ export function nameSimilarity(a: string, b: string): number {
   return (2 * hits) / (gx.size + gy.size)
 }
 
+/**
+ * Reduces a LinkedIn URL to the part that identifies the person.
+ *
+ * Two shapes count as a profile.
+ *
+ * The public one — `linkedin.com/in/adalovelace` — is what a CSV or an enrichment
+ * provider gives you.
+ *
+ * The Sales Navigator one — `linkedin.com/sales/lead/ACwAAB...` — is what you get
+ * from a saved Sales Navigator page, and it is the *only* identifier those pages
+ * carry: they never mention the public URL. Rejecting it would mean nothing parsed
+ * out of Sales Navigator could be imported at all, which is the entire point of
+ * having a parser. It opens the person in the browser exactly as the public URL
+ * does, which is all the queue asks of it.
+ *
+ * The two are not interchangeable as keys — the same person reached both ways
+ * produces two different strings and so two contacts. That is a real limitation
+ * with no fix available: LinkedIn does not publish the mapping. The `id,`
+ * truncation matters here: Sales Navigator appends a search context after a comma
+ * (`ACwAAB...,NAME_SEARCH,u8r5`) that differs between searches for the same person,
+ * so keeping it would defeat dedupe entirely.
+ */
 export function normalizeLinkedIn(url?: string | null): string | null {
   if (!url) return null
-  const m = url.match(/linkedin\.com\/in\/([^/?#]+)/i)
-  return m ? `linkedin.com/in/${m[1].toLowerCase()}` : null
+
+  const pub = url.match(/linkedin\.com\/in\/([^/?#]+)/i)
+  if (pub) return `linkedin.com/in/${pub[1].toLowerCase()}`
+
+  const lead = url.match(/linkedin\.com\/sales\/lead\/([^/?#,]+)/i)
+  if (lead) return `linkedin.com/sales/lead/${lead[1]}`
+
+  return null
 }
 
 export async function findDuplicates(incoming: IncomingContact): Promise<DedupeMatch[]> {

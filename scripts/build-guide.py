@@ -340,6 +340,43 @@ section(
 )
 
 section(
+    "cleanup", "Deleting things", "when a record should not be there",
+    """
+<p class="lede">A test import, a company you no longer track, a campaign built wrong.
+Contacts, accounts, campaigns, templates and deals can all be deleted — and every
+confirmation tells you what else goes with it before you press the button.</p>
+
+<p>A contact is never one row. Deleting one also removes their timeline, the emails to
+and from them, their tasks, their deals and their campaign enrolments. So the dialog
+counts those first rather than asking “are you sure?” about an unspecified amount of
+damage.</p>
+"""
+    + img("delete-contacts", "Tick the rows, press Delete. The confirmation counts the collateral.")
+    + """
+<h3>Deleting a company</h3>
+<p>Removing a company does <strong>not</strong> remove its people by default — someone you
+stop tracking as an account is still a person you know. If you do want them gone,
+tick the box, and the dialog restates the cost as <em>their</em> cost.</p>
+"""
+    + img("delete-account", "The option is offered, not guessed, and taking it changes what the dialog says.")
+    + """
+<div class="callout amber">
+  <h4>Two things deleting will not do</h4>
+  <p><strong>It will not un-unsubscribe anyone.</strong> If someone unsubscribed or you
+  marked them do-not-contact, that is kept after the contact is gone — including when
+  they are removed as part of a company. Re-importing them later will not start
+  emailing them again.</p>
+  <p><strong>It will not stop a campaign mid-flight.</strong> A running campaign with
+  people still in it refuses to be deleted. Pause it first — that stops everyone where
+  they are — then delete it.</p>
+</div>
+
+<p>Every delete is written to the <strong>Audit log</strong>, one entry per record, so
+“was this one of them?” has an answer afterwards. Nothing here is undoable.</p>
+""",
+)
+
+section(
     "admin", "Admin", "setup and health",
     """
 <h3>Readiness</h3>

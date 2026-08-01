@@ -280,6 +280,32 @@ describe('a 403 from Graph', () => {
     return verifyGraphAccess({ ...CREDS, clientId: `app-${roles?.join('-') ?? 'none'}` })
   }
 
+  it('refetches the token once before blaming anything', async () => {
+    // The realistic sequence: connect, fail, grant consent in Entra, connect
+    // again. Without this the second attempt reuses the roles-less token that is
+    // still valid for another hour, and the portal and the app disagree.
+    const { verifyGraphAccess } = await import('../email/graph')
+    let tokenRequests = 0
+    vi.stubGlobal('fetch', async (url: string) => {
+      if (String(url).includes('/oauth2/v2.0/token')) {
+        tokenRequests++
+        // Consent lands between the first token and the second.
+        const roles = tokenRequests === 1 ? undefined : ['Mail.Read']
+        return new Response(
+          JSON.stringify({ access_token: tokenWith(roles), expires_in: 3600 }),
+          { status: 200, headers: { 'content-type': 'application/json' } }
+        )
+      }
+      // Graph still refuses, so we can observe the retry rather than a success.
+      return new Response('{}', { status: 403 })
+    })
+
+    const r = await verifyGraphAccess({ ...CREDS, clientId: 'app-refetch' })
+    expect(tokenRequests).toBe(2)
+    // And the message reflects the *fresh* token, not the stale one.
+    expect(!r.ok && r.error).toMatch(/Application Access Policy/)
+  })
+
   it('blames the access policy when the permission is there', async () => {
     const r = await verifyWith(['Mail.Read', 'Mail.Send'])
     expect(r.ok).toBe(false)

@@ -93,10 +93,27 @@ const tokenCache = new Map<string, TokenCacheEntry>()
  * meet a rate limit. The 60-second margin covers clock skew between us and
  * Entra — a token that expires mid-request fails the whole poll.
  */
-async function accessToken(creds: GraphCredentials): Promise<string> {
-  const key = `${creds.tenantId}:${creds.clientId}`
+function cacheKey(creds: GraphCredentials): string {
+  return `${creds.tenantId}:${creds.clientId}`
+}
+
+/**
+ * Throws away a cached token so the next call fetches a fresh one.
+ *
+ * A token carries the permissions that existed when it was issued. Grant
+ * Mail.Read in Entra a minute after the app first tried to connect, and the
+ * cached token still has none — so Graph keeps returning 403 for the rest of the
+ * hour while the portal plainly shows the permission granted. That is
+ * indistinguishable, from the outside, from a configuration that does not work.
+ */
+export function forgetToken(creds: GraphCredentials): void {
+  tokenCache.delete(cacheKey(creds))
+}
+
+async function accessToken(creds: GraphCredentials, opts: { fresh?: boolean } = {}): Promise<string> {
+  const key = cacheKey(creds)
   const cached = tokenCache.get(key)
-  if (cached && cached.expiresAt > Date.now() + 60_000) return cached.token
+  if (!opts.fresh && cached && cached.expiresAt > Date.now() + 60_000) return cached.token
 
   const body = new URLSearchParams({
     client_id: creds.clientId,
@@ -351,11 +368,12 @@ export type GraphVerification = {
 }
 
 export async function verifyGraphAccess(
-  creds: GraphCredentials
+  creds: GraphCredentials,
+  opts: { retried?: boolean } = {}
 ): Promise<{ ok: true; result: GraphVerification } | { ok: false; error: string }> {
   let token: string
   try {
-    token = await accessToken(creds)
+    token = await accessToken(creds, { fresh: opts.retried })
   } catch (err) {
     return { ok: false, error: explainFetchError(err) }
   }
@@ -371,6 +389,13 @@ export async function verifyGraphAccess(
     // not save those settings" — describing a database problem for what is a
     // network one.
     return { ok: false, error: explainFetchError(err) }
+  }
+
+  if (res.status === 403 && !opts.retried) {
+    // Before blaming the configuration, rule out our own cache: a token issued
+    // before consent was granted has no roles and stays valid for an hour.
+    forgetToken(creds)
+    return verifyGraphAccess(creds, { retried: true })
   }
 
   if (res.status === 403) {
@@ -562,7 +587,7 @@ export async function sendViaGraph(
     body: JSON.stringify(draftBody),
   })
 
-  if (!created.ok) return await graphFailure(created, 'creating the draft')
+  if (!created.ok) return await graphFailure(created, 'creating the draft', creds)
 
   const draft = (await created.json()) as { id?: string; internetMessageId?: string }
   if (!draft.id) {
@@ -582,14 +607,24 @@ export async function sendViaGraph(
       method: 'DELETE',
       headers: auth,
     }).catch(() => {})
-    return await graphFailure(sent, 'sending the draft')
+    return await graphFailure(sent, 'sending the draft', creds)
   }
 
   return { ok: true, internetMessageId: draft.internetMessageId ?? message.messageId }
 }
 
 /** Turns a Graph error response into an outcome, preserving the reason. */
-async function graphFailure(res: Response, what: string): Promise<GraphSendResult> {
+async function graphFailure(
+  res: Response,
+  what: string,
+  creds?: GraphCredentials
+): Promise<GraphSendResult> {
+  // A 403 may mean the permissions changed under a token we are still caching.
+  // Dropping it costs one token request; keeping it costs an hour of silence.
+  // No retry here — the outbox already retries, and the next attempt gets a
+  // fresh token.
+  if (res.status === 403 && creds) forgetToken(creds)
+
   const text = await res.text().catch(() => '')
   let code = ''
   try {

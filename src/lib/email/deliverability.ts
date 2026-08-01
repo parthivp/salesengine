@@ -85,12 +85,68 @@ export async function checkDomainAuth(domain: string, dkimSelectors?: string[]):
   return { spf, dkim, dmarc }
 }
 
-/** A mailbox may only send when SPF and DKIM both pass. DMARC is advisory. */
-export function maySend(auth: AuthCheck): { allowed: boolean; blockers: string[] } {
+export type SendVerdict = {
+  allowed: boolean
+  blockers: string[]
+  /** Real problems that are not worth refusing to send over. */
+  warnings: string[]
+}
+
+/**
+ * May this mailbox send?
+ *
+ * SPF always has to pass. Without it receivers cannot tell that whatever is
+ * sending on your behalf is entitled to, and the mail is rejected or filed as
+ * spam wherever it matters.
+ *
+ * DKIM is where the transport matters, and treating it as one rule was wrong.
+ * When we hand a message to Amazon SES, nobody signs it unless the operator has
+ * published a selector, so an unsigned domain is genuinely unsendable and
+ * blocking is right. When we hand it to Microsoft Graph, **Microsoft signs it**
+ * with the tenant's own key whether or not a custom selector exists — so a
+ * Microsoft 365 mailbox with SPF passing produces authenticated mail that
+ * receivers accept, and refusing to send it is the app inventing a problem.
+ *
+ * That cost a real operator a morning: SPF green, mailbox connected, Graph ready,
+ * and the app refusing to send until they published DKIM records their provider
+ * had already made unnecessary for delivery.
+ *
+ * It is still worth publishing. A custom selector aligns the DKIM domain with the
+ * From address, which is what keeps DMARC passing when a message is forwarded and
+ * SPF alignment breaks. So: a warning, which is what an improvement worth making
+ * looks like — not a blocker, which is what an impossibility looks like.
+ */
+export function maySend(
+  auth: AuthCheck,
+  opts: { providerSignsDkim?: boolean } = {}
+): SendVerdict {
   const blockers: string[] = []
+  const warnings: string[] = []
+
   if (!auth.spf.ok) blockers.push(auth.spf.reason ?? 'SPF failed.')
-  if (!auth.dkim.ok) blockers.push(auth.dkim.reason ?? 'DKIM failed.')
-  return { allowed: blockers.length === 0, blockers }
+
+  if (!auth.dkim.ok) {
+    if (opts.providerSignsDkim) {
+      warnings.push(
+        'No DKIM selector published for this domain. Microsoft 365 still signs your mail with ' +
+          'the tenant key, so it will authenticate — but publishing selector1 and selector2 ' +
+          'aligns DKIM with your own domain, which is what keeps DMARC passing when a message ' +
+          'is forwarded.'
+      )
+    } else {
+      blockers.push(auth.dkim.reason ?? 'DKIM failed.')
+    }
+  }
+
+  if (!auth.dmarc.ok) {
+    warnings.push(
+      auth.dmarc.reason ??
+        'No DMARC record. Not required to send, but without one you get no reports on who is ' +
+          'sending as your domain.'
+    )
+  }
+
+  return { allowed: blockers.length === 0, blockers, warnings }
 }
 
 // ---------------------------------------------------------------------------

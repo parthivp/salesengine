@@ -291,6 +291,40 @@ describe('reputation', () => {
       maySend({ spf: { ok: true }, dkim: { ok: false, reason: 'none' }, dmarc: { ok: true } }).allowed
     ).toBe(false)
   })
+
+  it('does not block a Microsoft 365 mailbox for a missing DKIM selector', () => {
+    // Microsoft signs outbound mail with the tenant key whether or not a custom
+    // selector exists, so with SPF passing the mail authenticates. Blocking it
+    // was the app inventing a problem — and it cost a real operator a morning
+    // publishing DNS records that delivery did not require.
+    const v = maySend(
+      { spf: { ok: true }, dkim: { ok: false, reason: 'none' }, dmarc: { ok: true } },
+      { providerSignsDkim: true }
+    )
+    expect(v.allowed).toBe(true)
+    expect(v.blockers).toEqual([])
+    // Still worth doing, so it is said — as a warning, which is what an
+    // improvement looks like, rather than a blocker, which is what an
+    // impossibility looks like.
+    expect(v.warnings.join(' ')).toMatch(/aligns DKIM with your own domain/)
+  })
+
+  it('still blocks a missing SPF even when the provider signs', () => {
+    // SPF is about whether the sender is entitled to send at all. No signature
+    // rescues that.
+    const v = maySend(
+      { spf: { ok: false, reason: 'no record' }, dkim: { ok: false }, dmarc: { ok: true } },
+      { providerSignsDkim: true }
+    )
+    expect(v.allowed).toBe(false)
+    expect(v.blockers).toEqual(['no record'])
+  })
+
+  it('reports a missing DMARC as a warning rather than silence', () => {
+    const v = maySend({ spf: { ok: true }, dkim: { ok: true }, dmarc: { ok: false } })
+    expect(v.allowed).toBe(true)
+    expect(v.warnings.length).toBe(1)
+  })
 })
 
 describe('html and tracking links', () => {

@@ -9,7 +9,7 @@ import { domainFromEmail } from '@/lib/utils'
 import { audit } from '@/lib/audit'
 import { warmupCap } from '@/lib/email/schedule'
 import { seal } from '@/lib/crypto'
-import { verifyGraphAccess } from '@/lib/email/graph'
+import { verifyGraphAccess, graphCredentialsFrom } from '@/lib/email/graph'
 import { logger } from '@/lib/logger'
 
 export type MailboxResult =
@@ -33,6 +33,10 @@ export async function addMailbox(input: z.input<typeof addSchema>): Promise<Mail
 
   // Check DNS before creating the row, so a mailbox is never created in a state
   // where the app believes it can send but receivers will reject.
+  //
+  // No `providerSignsDkim` here: a mailbox being created has no transport
+  // configured yet. Connecting Microsoft 365 re-runs this via the re-check, which
+  // does know.
   const dns = await checkDomainAuth(domain)
   const verdict = maySend(dns)
 
@@ -84,7 +88,12 @@ export async function recheckMailbox(mailboxId: string): Promise<MailboxResult> 
     })
 
     const dns = await checkDomainAuth(result.domain)
-    const verdict = maySend(dns)
+    // Microsoft signs outbound mail from a Graph-connected mailbox with the
+    // tenant key, so a missing custom selector is an improvement to make, not a
+    // reason to refuse to send.
+    const verdict = maySend(dns, {
+      providerSignsDkim: Boolean(graphCredentialsFrom(result.mailbox.credentials)),
+    })
 
     await withTenant(auth.tenant.id, async () => {
       await db().mailbox.update({

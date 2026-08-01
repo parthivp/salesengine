@@ -87,9 +87,13 @@ export default async function MailboxesPage() {
               {live ? 'Live sending is armed' : 'Live sending is disabled'}
             </p>
             <p className="mt-0.5 text-sm text-ink-500">
+              {/* This used to say "set it to ses or auto with AWS credentials",
+                  which was the only way to send before Graph existed. A Microsoft
+                  365 workspace needs no AWS account and no domain verification,
+                  and telling them otherwise sends them off to open one. */}
               {live
-                ? 'EMAIL_TRANSPORT resolves to SES, so activating a sequence will send real email.'
-                : 'EMAIL_TRANSPORT is set to “log”, so the engine runs end to end but nothing leaves the server. Set it to “ses” or “auto” with AWS credentials to send for real.'}
+                ? 'EMAIL_TRANSPORT permits sending, so activating a sequence will send real email. Each mailbox uses its own transport — Microsoft 365 through Graph, otherwise SES.'
+                : 'EMAIL_TRANSPORT is set to “log”, so the engine runs end to end but nothing leaves the server. Set it to “live” when you are ready; a connected Microsoft 365 mailbox sends through Graph with no AWS account needed.'}
             </p>
           </div>
         </div>

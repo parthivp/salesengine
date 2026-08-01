@@ -277,6 +277,43 @@ export async function deleteTemplate(id: string): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
+// Inbox messages
+// ---------------------------------------------------------------------------
+
+export async function previewMessageDelete(ids: string[]): Promise<DeletePreview> {
+  const messages = await db().emailMessage.findMany({
+    where: { id: { in: ids }, direction: 'inbound' },
+    select: { id: true, subject: true, status: true },
+  })
+
+  const label =
+    messages.length === 1
+      ? `“${messages[0].subject || '(no subject)'}”`
+      : `${messages.length} messages`
+
+  return {
+    label,
+    alsoRemoved: [],
+    sideEffects: [
+      // The reason this delete is safe, stated rather than assumed. Everything a
+      // reply *did* — stopping the campaign, suppressing the address, marking the
+      // contact replied — lives on those records, not on this one. Deleting the
+      // mail is throwing away the copy, not reversing the decision.
+      'Anything this reply already did — stopping a campaign, marking someone ' +
+        'unsubscribed — stays done. Only the copy of the message goes.',
+    ],
+    blockers: [],
+  }
+}
+
+export async function deleteMessages(ids: string[]): Promise<{ deleted: number }> {
+  const { count } = await db().emailMessage.deleteMany({
+    where: { id: { in: ids }, direction: 'inbound' },
+  })
+  return { deleted: count }
+}
+
+// ---------------------------------------------------------------------------
 // Deals
 // ---------------------------------------------------------------------------
 

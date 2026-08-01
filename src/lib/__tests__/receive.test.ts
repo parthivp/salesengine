@@ -438,3 +438,65 @@ describe('tenant routing', () => {
     expect(await tenantForInbound('nobody@unknown-domain.test')).toBeNull()
   })
 })
+
+describe('mail that is not a reply', () => {
+  /**
+   * A mailbox receives more than replies. Before this, a LinkedIn job alert was
+   * stored as an inbound message with the same standing as a prospect writing
+   * back — so the Inbox counted ninety-seven newsletters as replies and the one
+   * that mattered was somewhere in the middle of them.
+   */
+  it('files a job alert as bulk rather than as a reply', async () => {
+    const msg = inbound({
+      fromEmail: 'jobalerts-noreply@linkedin.com',
+      toEmail: 'rep@recvtest.test',
+      subject: '“Founder” and 9 other jobs for you',
+      bodyText: 'See the latest jobs matching your profile.',
+      headers: { 'list-unsubscribe': '<https://www.linkedin.com/e/unsub>' },
+    })
+
+    const r = await ingestInbound(tenantId, msg)
+    expect(r).toMatchObject({ ok: false, reason: 'bulk' })
+
+    // Kept, not dropped: the judgement "this is not for us" is ours and can be wrong.
+    const stored = await owner.emailMessage.findFirstOrThrow({
+      where: { tenantId, messageId: msg.messageId },
+    })
+    expect(stored.status).toBe('filtered')
+  })
+
+  it('still treats a threaded reply as a reply, whatever its headers say', async () => {
+    // Some corporate mail systems stamp bulk headers on ordinary outbound mail.
+    // Hiding a live prospect is a far worse error than showing a newsletter, so
+    // the thread match wins over every bulk signal.
+    const sent = await owner.emailMessage.create({
+      data: {
+        tenantId, direction: 'outbound', status: 'sent', contactId,
+        fromEmail: 'rep@recvtest.test', toEmail: 'buyer@prospect.test',
+        subject: 'Quick question', messageId: `<out-bulk-${Date.now()}@recvtest.test>`,
+        sentAt: NOW,
+      },
+    })
+
+    const r = await ingestInbound(
+      tenantId,
+      inbound({
+        inReplyTo: sent.messageId!,
+        headers: { 'list-unsubscribe': '<mailto:x@corp.test>', precedence: 'bulk' },
+      })
+    )
+    expect(r.ok).toBe(true)
+    expect(isReply(r) && r.classification.intent).toBe('interested')
+  })
+
+  it('still treats mail from a known contact as a reply', async () => {
+    const r = await ingestInbound(
+      tenantId,
+      inbound({
+        fromEmail: 'buyer@prospect.test',
+        headers: { 'list-id': '<news.corp.test>' },
+      })
+    )
+    expect(r.ok).toBe(true)
+  })
+})

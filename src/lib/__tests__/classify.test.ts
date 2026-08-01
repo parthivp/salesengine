@@ -4,8 +4,7 @@ import {
   stripQuoted,
   parseReturnDate,
   REVIEW_THRESHOLD,
-  type ReplyInput,
-} from '../email/classify'
+  type ReplyInput, detectBulkMail } from '../email/classify'
 
 const NOW = new Date('2026-07-30T09:00:00Z')
 
@@ -300,5 +299,81 @@ describe('no-reply senders', () => {
   it('does not catch a real person whose address merely starts similarly', () => {
     const c = classifyReply(reply({ fromEmail: 'noreen@prospect.test', bodyText: 'Yes, interested!' }), NOW)
     expect(c.intent).toBe('interested')
+  })
+})
+
+describe('bulk headers are weaker than a person writing', () => {
+  /**
+   * These headers used to short-circuit to `auto_reply` at 0.85 confidence — above
+   * the review threshold, so not even flagged. A prospect on a mail system that
+   * stamps `Precedence: bulk` on outbound mail would write "yes, send pricing", be
+   * filed as machine mail, not stop the sequence, and never be looked at.
+   */
+  it('still reads a human reply as one', () => {
+    const c = classifyReply(
+      reply({ bodyText: 'Yes — interested, send pricing.', headers: { precedence: 'bulk' } }),
+      NOW
+    )
+    expect(c.intent).toBe('interested')
+    expect(c.stopsSequence).toBe(true)
+  })
+
+  it('sends it to a human anyway, because the headers are odd', () => {
+    const c = classifyReply(
+      reply({ bodyText: 'Yes — interested, send pricing.', headers: { 'list-unsubscribe': '<x>' } }),
+      NOW
+    )
+    expect(c.needsReview).toBe(true)
+    expect(c.reasons.join(' ')).toMatch(/bulk headers/i)
+  })
+
+  it('reads mail with bulk headers and no human intent as automated', () => {
+    const c = classifyReply(
+      reply({
+        subject: 'Your weekly digest',
+        bodyText: 'Here are this week’s updates.',
+        headers: { 'list-id': '<news.corp.test>' },
+      }),
+      NOW
+    )
+    expect(c.intent).toBe('auto_reply')
+    // The important half: an unread newsletter must never end a live sequence.
+    expect(c.stopsSequence).toBe(false)
+  })
+
+  it('leaves a genuine auto-response alone', () => {
+    const c = classifyReply(
+      reply({ bodyText: 'Ticket #4 received.', headers: { 'auto-submitted': 'auto-replied' } }),
+      NOW
+    )
+    expect(c.intent).toBe('auto_reply')
+    expect(c.stopsSequence).toBe(false)
+  })
+})
+
+describe('detectBulkMail', () => {
+  it('recognises a LinkedIn job alert', () => {
+    const r = detectBulkMail({
+      fromEmail: 'jobalerts-noreply@linkedin.com',
+      subject: '“Founder” and 9 other jobs for you',
+      headers: { 'list-unsubscribe': '<https://linkedin.com/e/unsub>' },
+    })
+    expect(r.isBulk).toBe(true)
+  })
+
+  it('does not flag an ordinary person', () => {
+    const r = detectBulkMail({
+      fromEmail: 'buyer@prospect.test',
+      subject: 'Re: Quick question',
+      headers: { 'in-reply-to': '<x@y>' },
+    })
+    expect(r.isBulk).toBe(false)
+  })
+
+  it('does not flag someone whose address merely contains a keyword', () => {
+    // "jobin" is a name. Anchoring on word parts rather than substrings keeps a
+    // real person out of the Other folder, where they would never be seen.
+    expect(detectBulkMail({ fromEmail: 'jobin@prospect.test' }).isBulk).toBe(false)
+    expect(detectBulkMail({ fromEmail: 'newsome@prospect.test' }).isBulk).toBe(false)
   })
 })

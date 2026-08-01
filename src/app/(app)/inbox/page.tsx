@@ -1,9 +1,9 @@
 import { requireAuth } from '@/lib/auth'
 import { withTenant, db } from '@/lib/db'
-import { PageHeader, Card, EmptyState, StatTile } from '@/components/ui'
+import { can } from '@/lib/rbac'
+import { PageHeader, Card } from '@/components/ui'
 import { displayName, formatRelative } from '@/lib/utils'
-import { Inbox as InboxIcon } from 'lucide-react'
-import { ReplyList, type ReplyRow } from './client'
+import { MailView, type MailRow, type Folder } from './client'
 import type { ReplyIntent } from '@/lib/email/classify'
 
 export const metadata = { title: 'Inbox · SalesEngine' }
@@ -17,53 +17,83 @@ type ReplyDetail = {
   messageId?: string
 }
 
-export default async function InboxPage() {
+/** How many rows one screenful of the list holds. */
+const PAGE_SIZE = 200
+
+const FOLDERS: Folder[] = ['replies', 'review', 'other']
+
+function isFolder(v: string | undefined): v is Folder {
+  return FOLDERS.includes(v as Folder)
+}
+
+export default async function InboxPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ folder?: string; page?: string }>
+}) {
   const auth = await requireAuth()
+  const sp = await searchParams
+  const folder: Folder = isFolder(sp.folder) ? sp.folder : 'replies'
+  const page = Math.max(1, Number(sp.page) || 1)
 
-  const { replies, classifications, pollState } = await withTenant(auth.tenant.id, async () => {
-    const replies = await db().emailMessage.findMany({
-      where: { direction: 'inbound' },
-      orderBy: { repliedAt: 'desc' },
-      take: 100,
-      include: {
-        contact: {
-          select: {
-            id: true, firstName: true, lastName: true, email: true, title: true,
-            account: { select: { name: true } },
+  // "Other" is the mail we filed as bulk. Everything else is a real reply; the
+  // review folder is a subset of it rather than a separate pile, because a message
+  // needing a read is still a reply and must not vanish from the main list.
+  const where =
+    folder === 'other'
+      ? { direction: 'inbound' as const, status: 'filtered' as const }
+      : { direction: 'inbound' as const, status: { not: 'filtered' as const } }
+
+  const data = await withTenant(auth.tenant.id, async () => {
+    const [messages, totals, pollState] = await Promise.all([
+      db().emailMessage.findMany({
+        where,
+        orderBy: { repliedAt: 'desc' },
+        skip: (page - 1) * PAGE_SIZE,
+        take: PAGE_SIZE,
+        include: {
+          contact: {
+            select: {
+              id: true, firstName: true, lastName: true, email: true, title: true,
+              account: { select: { name: true } },
+            },
           },
+          enrollment: { select: { sequence: { select: { name: true } } } },
         },
-        enrollment: { select: { sequence: { select: { name: true } } } },
-      },
-    })
+      }),
+      db().emailMessage.groupBy({
+        by: ['status'],
+        where: { direction: 'inbound' },
+        _count: true,
+      }),
+      db().mailbox.findMany({
+        select: { email: true, imapLastPolledAt: true, imapLastError: true, credentials: true },
+      }),
+    ])
 
-    // The classification lives on the activity the ingest wrote, not on the
-    // message: it is a judgement *about* the message, and keeping it separate is
-    // what lets a human correction sit beside the machine's original call rather
-    // than on top of it.
-    const contactIds = replies.map((r) => r.contactId).filter((x): x is string => Boolean(x))
+    const contactIds = messages.map((r) => r.contactId).filter((x): x is string => Boolean(x))
     const activities = contactIds.length
       ? await db().activity.findMany({
           where: { type: 'reply', contactId: { in: contactIds } },
           orderBy: { occurredAt: 'desc' },
           select: { detail: true },
-          take: 300,
+          take: 600,
         })
       : []
 
-    const classifications = new Map<string, ReplyDetail>()
-    for (const a of activities) {
-      const d = a.detail as ReplyDetail | null
-      if (d?.messageId && !classifications.has(d.messageId)) classifications.set(d.messageId, d)
-    }
-
-    const mailboxes = await db().mailbox.findMany({
-      select: { email: true, imapLastPolledAt: true, imapLastError: true, credentials: true },
-    })
-
-    return { replies, classifications, pollState: mailboxes }
+    return { messages, totals, pollState, activities }
   })
 
-  const rows: ReplyRow[] = replies.map((m) => {
+  // The classification lives on the activity the ingest wrote, not on the message:
+  // it is a judgement *about* the message, and keeping it separate is what lets a
+  // human correction sit beside the machine's original call rather than on top of it.
+  const classifications = new Map<string, ReplyDetail>()
+  for (const a of data.activities) {
+    const d = a.detail as ReplyDetail | null
+    if (d?.messageId && !classifications.has(d.messageId)) classifications.set(d.messageId, d)
+  }
+
+  const rows: MailRow[] = data.messages.map((m) => {
     const c = classifications.get(m.id)
     return {
       id: m.id,
@@ -75,6 +105,7 @@ export default async function InboxPage() {
       confidence: c?.confidence ?? null,
       reasons: c?.reasons ?? [],
       needsReview: c?.needsReview ?? false,
+      filtered: m.status === 'filtered',
       contact: m.contact
         ? {
             id: m.contact.id,
@@ -87,12 +118,21 @@ export default async function InboxPage() {
     }
   })
 
-  const needsReview = rows.filter((r) => r.needsReview).length
-  const interested = rows.filter((r) => r.intent === 'interested').length
-  const unmatched = rows.filter((r) => !r.contact).length
+  const count = (s: string) =>
+    data.totals.filter((t) => (s === 'filtered' ? t.status === 'filtered' : t.status !== 'filtered'))
+      .reduce((n, t) => n + t._count, 0)
 
-  // Both transports count — a Microsoft 365 workspace polls through Graph.
-  const polling = pollState.filter((m) => {
+  const totalReplies = count('replies')
+  const totalOther = count('filtered')
+  const total = folder === 'other' ? totalOther : totalReplies
+
+  // Review is a view over the page in hand rather than a database count: whether a
+  // message needs a read is recorded on the activity, not the message, so counting
+  // it properly would mean joining every activity in the workspace to answer a
+  // number in a tab. The tab says what is on this page, which is what it filters.
+  const needsReview = rows.filter((r) => r.needsReview).length
+
+  const polling = data.pollState.filter((m) => {
     const c = m.credentials as { imap?: unknown; graph?: unknown } | null
     return Boolean(c?.imap || c?.graph)
   })
@@ -106,50 +146,25 @@ export default async function InboxPage() {
     <>
       <PageHeader
         title="Inbox"
-        description="Replies pulled from your mailboxes and read for intent. A real reply stops the sequence; an out-of-office holds it until they are back."
+        description="Replies pulled from your mailboxes and read for intent. Newsletters and notifications are filed under Other rather than counted as replies."
       />
 
-      <div className="grid grid-cols-1 sm:grid-cols-4 gap-4 mb-6">
-        <StatTile label="Replies" value={String(rows.length)} hint="most recent 100" />
-        <StatTile label="Interested" value={String(interested)} tone={interested ? 'positive' : 'neutral'} />
-        <StatTile
-          label="Needs a read"
-          value={String(needsReview)}
-          tone={needsReview ? 'warning' : 'neutral'}
-          hint={needsReview ? 'the classifier was not confident' : 'nothing ambiguous'}
-        />
-        <StatTile
-          label="Mailboxes polled"
-          value={polling.length === 0 ? 'None' : String(polling.length)}
-          tone={polling.length === 0 || pollErrors.length ? 'warning' : 'positive'}
-          hint={
-            polling.length === 0
-              ? 'no IMAP configured'
-              : pollErrors.length
-                ? `${pollErrors.length} failing`
-                : lastPoll
-                  ? `last ${formatRelative(lastPoll)}`
-                  : 'not polled yet'
-          }
-        />
-      </div>
-
-      {/* The most important state this page can be in. Without polling, every
-          number above is a zero that means "we are not looking", not "nobody
-          replied" — and the sequences keep sending regardless. */}
+      {/* The most important state this page can be in. Without polling, an empty
+          list means "we are not looking", not "nobody replied" — and the sequences
+          keep sending regardless. */}
       {polling.length === 0 && (
-        <Card className="mb-6 p-5 border-amber-200 bg-amber-50/60">
+        <Card className="mb-4 p-4 border-amber-200 bg-amber-50/60">
           <p className="text-sm font-medium text-amber-900">No mailbox is being polled for replies</p>
           <p className="mt-1 text-sm text-amber-800">
             Until one is, sequences cannot tell that someone has written back, and will keep emailing
-            people who already replied. Add IMAP details to a mailbox under{' '}
+            people who already replied. Add a mailbox under{' '}
             <a href="/admin/mailboxes" className="underline font-medium">Mailboxes</a>.
           </p>
         </Card>
       )}
 
       {pollErrors.length > 0 && (
-        <Card className="mb-6 p-5 border-red-200 bg-red-50/60">
+        <Card className="mb-4 p-4 border-red-200 bg-red-50/60">
           <p className="text-sm font-medium text-red-900">
             {pollErrors.length === 1 ? 'A mailbox is' : `${pollErrors.length} mailboxes are`} failing to poll
           </p>
@@ -163,25 +178,16 @@ export default async function InboxPage() {
         </Card>
       )}
 
-      <Card>
-        {rows.length === 0 ? (
-          <EmptyState
-            icon={InboxIcon}
-            title="No replies yet"
-            description="Replies are pulled from your mailboxes every few minutes, read for intent, and shown here. Anything the classifier is unsure about is flagged for you rather than acted on."
-          />
-        ) : (
-          <>
-            {unmatched > 0 && (
-              <p className="px-5 py-3 border-b border-ink-100 text-xs text-ink-500">
-                {unmatched} {unmatched === 1 ? 'reply is' : 'replies are'} not linked to a contact — kept
-                here rather than discarded, so nothing is lost.
-              </p>
-            )}
-            <ReplyList replies={rows} />
-          </>
-        )}
-      </Card>
+      <MailView
+        rows={rows}
+        folder={folder}
+        page={page}
+        pageSize={PAGE_SIZE}
+        total={total}
+        counts={{ replies: totalReplies, review: needsReview, other: totalOther }}
+        canDelete={can(auth.user.role, 'message:delete')}
+        lastPoll={lastPoll ? formatRelative(lastPoll) : null}
+      />
     </>
   )
 }

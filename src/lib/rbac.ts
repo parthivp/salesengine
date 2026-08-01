@@ -30,19 +30,21 @@ export const PERMISSIONS = {
     'team:*', 'customfield:*', 'integration:*', 'mailbox:*',
     'sequence:*', 'template:*', 'contact:*', 'account:*', 'lead:*',
     'deal:*', 'task:*', 'list:*', 'form:*', 'report:*', 'audit:read',
-    'apikey:*', 'suppression:*',
+    'apikey:*', 'suppression:*', 'message:*',
   ],
   manager: [
     'tenant:read', 'user:read', 'team:read',
     'sequence:*', 'template:*', 'contact:*', 'account:*', 'lead:*',
     'deal:*', 'task:*', 'list:*', 'form:read', 'report:read',
-    'mailbox:read', 'suppression:*',
+    'mailbox:read', 'suppression:*', 'message:*',
   ],
   rep: [
     'tenant:read', 'user:read', 'team:read',
     'sequence:read', 'sequence:enroll', 'template:read', 'template:create',
     'contact:*', 'account:*', 'lead:*', 'deal:*', 'task:*', 'list:*',
     'report:read', 'mailbox:read', 'suppression:create',
+    // Clearing a newsletter out of your own inbox is not an administrative act.
+    'message:read', 'message:delete',
   ],
 } as const satisfies Record<UserRole, readonly string[]>
 

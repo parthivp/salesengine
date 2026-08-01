@@ -87,18 +87,42 @@ function machineMailSignals(h: Record<string, string>): string[] {
   }
 
   const precedence = h['precedence']?.toLowerCase()
-  if (precedence && ['auto_reply', 'bulk', 'junk', 'list'].includes(precedence)) {
-    found.push(`Precedence: ${precedence}`)
-  }
+  if (precedence === 'auto_reply') found.push(`Precedence: ${precedence}`)
 
   if (h['x-ms-exchange-inbox-rules-loop']) found.push('Exchange auto-reply loop header')
-  if (h['feedback-id'] || h['x-campaign-id']) found.push('Bulk-mail header')
 
   // A vacation responder addresses the envelope sender; a real person replies to
   // a mailbox. An empty Return-Path is the classic "do not reply to this" marker.
   const returnPath = h['return-path']?.trim()
   if (returnPath === '<>' || returnPath === '') found.push('Null Return-Path')
 
+  return found
+}
+
+/**
+ * Headers that say "sent to a list", as distinct from "generated automatically".
+ *
+ * These used to sit in `machineMailSignals`, where any one of them short-circuited
+ * the whole classifier to `auto_reply` at 0.85 confidence — above the review
+ * threshold, so not even flagged for a human. That is wrong for a *threaded* reply:
+ * some corporate mail systems stamp `Precedence: bulk` on ordinary outbound mail,
+ * and a prospect on such a system who wrote "yes, send pricing" was filed as
+ * machine mail, did not stop the sequence, and did not get looked at. We kept
+ * emailing someone who had replied, which is the failure this whole feature exists
+ * to prevent.
+ *
+ * `Auto-Submitted` and `X-Autoreply` are a system stating it generated the message
+ * itself. These are weaker — for unthreaded mail they mean bulk (see
+ * `detectBulkMail`, which runs first), and for a real reply they mean very little.
+ */
+function bulkSignals(h: Record<string, string>): string[] {
+  const found: string[] = []
+  const precedence = h['precedence']?.toLowerCase()
+  if (precedence && ['bulk', 'junk', 'list'].includes(precedence)) {
+    found.push(`Precedence: ${precedence}`)
+  }
+  if (h['feedback-id'] || h['x-campaign-id']) found.push('Bulk-mail header')
+  if (h['list-id'] || h['list-unsubscribe']) found.push('Mailing-list header')
   return found
 }
 
@@ -267,6 +291,47 @@ export function stripQuoted(body: string): string {
   return kept.join('\n').trim()
 }
 
+/**
+ * Mail that was sent to a list rather than written to you.
+ *
+ * A mailbox receives more than replies. LinkedIn job alerts, newsletters, invoices,
+ * calendar notifications and every "your weekly summary" all land in the same
+ * folder, and the ingest stored each of them as an inbound message — so the Inbox
+ * reported "100 replies" when three were replies and ninety-seven were noise, and
+ * the one that mattered was on page two of a list that had no page two.
+ *
+ * This is a *separate* question from what a reply means, which is why it is not
+ * another `ReplyIntent`. `auto_reply` describes a machine answering on a person's
+ * behalf — an out-of-office, a ticket acknowledgement — and it still concerns your
+ * conversation with that person. Bulk mail concerns nothing you did.
+ *
+ * The signals are all headers rather than prose, because a header is a statement by
+ * the sending system and prose is a guess by us. `List-Unsubscribe` in particular
+ * is close to definitive: no human composing a reply in a mail client sets it.
+ *
+ * The caller must still check the message is not threaded to something we sent
+ * before acting on this. A prospect who replies from a mail system that stamps
+ * bulk headers is a reply, whatever the headers say — see `ingestInbound`.
+ */
+export function detectBulkMail(input: ReplyInput): { isBulk: boolean; reasons: string[] } {
+  const h = normaliseHeaders(input.headers)
+  const reasons: string[] = []
+
+  // Set by mailing-list and marketing senders, required by RFC 8058 for bulk mail,
+  // and never set by a person writing a reply.
+  reasons.push(...bulkSignals(h))
+  if (h['list-post'] || h['x-mailer-lid']) reasons.push('Mailing-list header')
+
+  // "jobs-listings@linkedin.com", "notifications@github.com". The local part is the
+  // sender telling you not to write back, which is the definition of not a reply.
+  const local = (input.fromEmail ?? '').split('@')[0]?.toLowerCase() ?? ''
+  if (NOREPLY_LOCALPART.test(local) || /(^|[-._])(jobs?|jobalerts?|invitations?|updates?|digest|newsletter|alerts?|news|marketing|billing|receipts?|invoice)([-._]|$)/.test(local)) {
+    reasons.push(`Sent from "${local}"`)
+  }
+
+  return { isBulk: reasons.length > 0, reasons }
+}
+
 export function classifyReply(input: ReplyInput, now = new Date()): ReplyClassification {
   const headers = normaliseHeaders(input.headers)
   const subject = (input.subject ?? '').trim()
@@ -342,9 +407,23 @@ export function classifyReply(input: ReplyInput, now = new Date()): ReplyClassif
   }
 
   if (scores.length === 0) {
+    // Nothing a person would write, and the headers said it went to a list. Mail
+    // that reached us for some other reason, not a reply — and unlike the branch
+    // above, this cannot stop a sequence.
+    const bulk = bulkSignals(headers)
+    if (bulk.length) {
+      reasons.push(...bulk)
+      return decide('auto_reply', 0.7, { stopsSequence: false })
+    }
     reasons.push('A person replied, but no clear intent — needs a human')
     return decide('unclear', 0.3, { stopsSequence: true })
   }
+
+  // Bulk headers on a message that reads like a person. Recorded so the reasoning
+  // is visible, but it does not overrule the prose — it lowers the confidence,
+  // which is what puts the message in front of a human.
+  const bulk = bulkSignals(headers)
+  if (bulk.length) reasons.push(...bulk, 'Bulk headers, but the message reads as written by a person')
 
   const totals = new Map<ReplyIntent, { score: number; why: string[] }>()
   for (const s of scores) {
@@ -368,7 +447,9 @@ export function classifyReply(input: ReplyInput, now = new Date()): ReplyClassif
     return decide('unclear', 0.35, { stopsSequence: true })
   }
 
-  const confidence = top.score >= 3 ? 0.8 : runnerUp === 0 ? 0.7 : 0.55
+  const base = top.score >= 3 ? 0.8 : runnerUp === 0 ? 0.7 : 0.55
+  // Below REVIEW_THRESHOLD, so a human reads it before anything is assumed.
+  const confidence = bulk.length ? Math.min(base, 0.5) : base
   // Every human reply stops the sequence, whatever they said. Continuing to send
   // to a person who is now in a conversation with you is the failure the whole
   // feature exists to prevent.

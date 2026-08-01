@@ -709,6 +709,9 @@ enum EmailStatus {
   opened
   clicked
   replied
+  // Inbound mail that was never addressed to us — a newsletter, a job alert, a
+  // notification. Stored rather than dropped, but kept out of the reply list.
+  filtered
   bounced
   complained
   failed

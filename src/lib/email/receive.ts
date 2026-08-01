@@ -1,5 +1,5 @@
 import { withTenant, db, tid, prismaAdmin } from '../db'
-import { classifyReply, INTENT_LABEL, type ReplyClassification } from './classify'
+import { classifyReply, detectBulkMail, INTENT_LABEL, type ReplyClassification } from './classify'
 import { normalizeEmail, domainFromEmail } from '../utils'
 import { rescoreContact } from '../leads/scoring'
 import { logger } from '../logger'
@@ -37,7 +37,7 @@ export type InboundMessage = {
 }
 
 export type IngestResult =
-  | { ok: false; reason: 'duplicate' | 'no_contact' | 'no_tenant'; messageId: string }
+  | { ok: false; reason: 'duplicate' | 'no_contact' | 'no_tenant' | 'bulk'; messageId: string }
   | {
       ok: true
       kind?: 'reply'
@@ -194,6 +194,43 @@ export async function ingestInbound(
     }
 
     const thread = await findThread(msg)
+
+    // Mail that was sent to a list rather than written to us. A mailbox receives
+    // job alerts, newsletters and notifications, and storing each of them as a
+    // reply made the inbox a place where a real reply could not be found.
+    //
+    // The thread check comes first and is the whole safety of this: a message that
+    // answers something we sent, or comes from a known contact, is a reply whatever
+    // its headers say. Some corporate mail systems stamp bulk headers on ordinary
+    // outbound mail, and hiding a live prospect is a far worse error than showing a
+    // newsletter.
+    const bulk = detectBulkMail(msg)
+    if (bulk.isBulk && !thread.parentId && !thread.contactId) {
+      await db().emailMessage.create({
+        data: {
+          tenantId: tid(),
+          direction: 'inbound',
+          // Kept, not dropped. It is out of the way rather than gone, because the
+          // judgement "this is not for us" is ours and it can be wrong.
+          status: 'filtered',
+          fromEmail: normalizeEmail(msg.fromEmail) ?? msg.fromEmail,
+          toEmail: normalizeEmail(msg.toEmail) ?? msg.toEmail,
+          subject: msg.subject.slice(0, 500),
+          bodyText: msg.bodyText,
+          bodyHtml: msg.bodyHtml ?? null,
+          messageId: msg.messageId,
+          inReplyTo: msg.inReplyTo ?? null,
+          threadKey: thread.threadKey ?? msg.messageId,
+          repliedAt: msg.receivedAt,
+        },
+      })
+      logger.info(
+        { messageId: msg.messageId, from: msg.fromEmail, reasons: bulk.reasons },
+        'inbound mail filed as bulk, not a reply'
+      )
+      return { ok: false, reason: 'bulk', messageId: msg.messageId }
+    }
+
     const classification = classifyReply(
       {
         subject: msg.subject,

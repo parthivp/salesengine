@@ -1,11 +1,12 @@
 import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest'
 import { PrismaClient } from '@prisma/client'
-import { withTenant } from '../db'
+import { withTenant, db } from '../db'
 import {
   previewContactDelete, deleteContacts,
   previewAccountDelete, deleteAccount,
   previewSequenceDelete, deleteSequence,
   previewTemplateDelete, deleteTemplate,
+  previewMessageDelete, deleteMessages,
 } from '../delete'
 
 const owner = new PrismaClient({
@@ -276,5 +277,54 @@ describe('deleting a template', () => {
     // The step keeps its own copy — a template is a starting point, not a link.
     await withTenant(tenantId, () => deleteTemplate(t.id))
     expect(await owner.sequenceStep.count({ where: { sequenceId: s.id } })).toBe(1)
+  })
+})
+
+describe('deleting a message from the inbox', () => {
+  it('states that what the reply already did stays done', async () => {
+    const m = await withTenant(tenantId, () =>
+      db().emailMessage.create({
+        data: {
+          tenantId, direction: 'inbound', status: 'replied',
+          fromEmail: 'someone@bulk.test', toEmail: 'rep@del.test',
+          subject: 'Your weekly digest',
+        },
+      })
+    )
+    const p = await withTenant(tenantId, () => previewMessageDelete([m.id]))
+    expect(p.label).toContain('Your weekly digest')
+    expect(p.sideEffects.join(' ')).toMatch(/stays done/i)
+    expect(p.blockers).toHaveLength(0)
+  })
+
+  it('removes the message and nothing else', async () => {
+    const m = await withTenant(tenantId, () =>
+      db().emailMessage.create({
+        data: {
+          tenantId, direction: 'inbound', status: 'filtered',
+          fromEmail: 'jobs@linkedin.com', toEmail: 'rep@del.test', subject: 'Jobs for you',
+        },
+      })
+    )
+    const r = await withTenant(tenantId, () => deleteMessages([m.id]))
+    expect(r.deleted).toBe(1)
+    expect(await owner.emailMessage.findUnique({ where: { id: m.id } })).toBeNull()
+  })
+
+  it('will not delete an outbound message through the inbox', async () => {
+    // The inbox deletes what arrived. A sent message is part of the record of what
+    // we did to someone, and removing it through a mail-tidying gesture would take
+    // the evidence with it.
+    const sent = await withTenant(tenantId, () =>
+      db().emailMessage.create({
+        data: {
+          tenantId, direction: 'outbound', status: 'sent',
+          fromEmail: 'rep@del.test', toEmail: 'someone@prospect.test', subject: 'Quick question',
+        },
+      })
+    )
+    const r = await withTenant(tenantId, () => deleteMessages([sent.id]))
+    expect(r.deleted).toBe(0)
+    expect(await owner.emailMessage.findUnique({ where: { id: sent.id } })).not.toBeNull()
   })
 })

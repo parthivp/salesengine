@@ -12,6 +12,7 @@ import {
   previewSequenceDelete, deleteSequence,
   previewTemplateDelete, deleteTemplate,
   previewDealDelete, deleteDeal,
+  previewMessageDelete, deleteMessages,
   type DeletePreview,
 } from '@/lib/delete'
 
@@ -28,7 +29,7 @@ import {
  * rendered.
  */
 
-export type DeleteKind = 'contact' | 'account' | 'sequence' | 'template' | 'deal'
+export type DeleteKind = 'contact' | 'account' | 'sequence' | 'template' | 'deal' | 'message'
 
 /** Permission and audit entity per kind, so neither can drift from the other. */
 const KINDS = {
@@ -37,10 +38,11 @@ const KINDS = {
   sequence: { permission: 'sequence:delete', entity: 'Sequence', path: '/sequences' },
   template: { permission: 'template:delete', entity: 'EmailTemplate', path: '/templates' },
   deal: { permission: 'deal:delete', entity: 'Deal', path: '/deals' },
+  message: { permission: 'message:delete', entity: 'EmailMessage', path: '/inbox' },
 } as const
 
 const schema = z.object({
-  kind: z.enum(['contact', 'account', 'sequence', 'template', 'deal']),
+  kind: z.enum(['contact', 'account', 'sequence', 'template', 'deal', 'message']),
   ids: z.array(z.string().min(1)).min(1).max(500),
   /** Options the dialog offered and the operator accepted. */
   cascadeContacts: z.boolean().optional(),
@@ -67,6 +69,7 @@ export async function previewDelete(
         case 'sequence': return previewSequenceDelete(ids[0])
         case 'template': return previewTemplateDelete(ids[0])
         case 'deal': return previewDealDelete(ids[0])
+        case 'message': return previewMessageDelete(ids)
       }
     })
     return { ok: true, preview }
@@ -108,6 +111,7 @@ export async function confirmDelete(input: z.input<typeof schema>): Promise<Dele
         case 'sequence': await deleteSequence(ids[0]); return 1
         case 'template': await deleteTemplate(ids[0]); return 1
         case 'deal': await deleteDeal(ids[0]); return 1
+        case 'message': return (await deleteMessages(ids)).deleted
       }
     })
 

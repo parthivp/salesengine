@@ -374,11 +374,26 @@ export async function verifyGraphAccess(
   }
 
   if (res.status === 403) {
+    // The token itself says which permissions were consented, so there is no need
+    // to offer the operator two possibilities and let them work out which. A
+    // registration with no Mail.Read has a consent problem; one that has it and is
+    // still refused has an Application Access Policy problem. Those are different
+    // portals and different fixes.
+    const roles = grantedRoles(token)
+    const hasRead = roles.some((r) => /^Mail\.(Read|ReadWrite|ReadBasic)/i.test(r))
+
     return {
       ok: false,
-      error:
-        'Authenticated, but denied access to that mailbox. Either admin consent has not been granted ' +
-        'for Mail.Read, or an Application Access Policy excludes this mailbox.',
+      error: hasRead
+        ? `Authenticated with ${roles.join(', ')}, but that mailbox is out of scope. An ` +
+          'Application Access Policy is excluding it — check with ' +
+          '`Test-ApplicationAccessPolicy -Identity <mailbox> -AppId <client id>`.'
+        : roles.length === 0
+          ? 'Authenticated, but the app registration has no application permissions at all. In ' +
+            'Entra, add Mail.Read under API permissions → Microsoft Graph → *Application* ' +
+            'permissions (not Delegated — there is no signed-in user here), then Grant admin consent.'
+          : `Authenticated with ${roles.join(', ')}, which does not include Mail.Read. Add it as ` +
+            'an *Application* permission in Entra and grant admin consent.',
     }
   }
   if (res.status === 404) {

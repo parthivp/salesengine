@@ -259,3 +259,44 @@ describe('explaining a failed request', () => {
     expect(explainFetchError('boom')).toBe('boom')
   })
 })
+
+describe('a 403 from Graph', () => {
+  // Three different causes wear the same status code, and they are fixed in
+  // different places. The token's own roles claim distinguishes them, so the
+  // message names one rather than listing possibilities.
+  const tokenWith = (roles: string[] | undefined) =>
+    ['h', Buffer.from(JSON.stringify(roles ? { roles } : {})).toString('base64url'), 's'].join('.')
+
+  async function verifyWith(roles: string[] | undefined) {
+    const { verifyGraphAccess } = await import('../email/graph')
+    vi.stubGlobal('fetch', async (url: string) =>
+      String(url).includes('/oauth2/v2.0/token')
+        ? new Response(JSON.stringify({ access_token: tokenWith(roles), expires_in: 3600 }), {
+            status: 200, headers: { 'content-type': 'application/json' },
+          })
+        : new Response('{}', { status: 403 })
+    )
+    // A distinct clientId per case, or the token cache serves the previous one.
+    return verifyGraphAccess({ ...CREDS, clientId: `app-${roles?.join('-') ?? 'none'}` })
+  }
+
+  it('blames the access policy when the permission is there', async () => {
+    const r = await verifyWith(['Mail.Read', 'Mail.Send'])
+    expect(r.ok).toBe(false)
+    expect(!r.ok && r.error).toMatch(/Application Access Policy/)
+    expect(!r.ok && r.error).not.toMatch(/admin consent/)
+  })
+
+  it('blames consent when there are no permissions at all', async () => {
+    const r = await verifyWith(undefined)
+    expect(!r.ok && r.error).toMatch(/no application permissions at all/)
+    // And names the trap: Delegated looks added but cannot work here.
+    expect(!r.ok && r.error).toMatch(/not Delegated/)
+  })
+
+  it('says what is missing when some permissions exist but not the right one', async () => {
+    const r = await verifyWith(['User.Read.All'])
+    expect(!r.ok && r.error).toMatch(/does not include Mail\.Read/)
+    expect(!r.ok && r.error).toMatch(/User\.Read\.All/)
+  })
+})

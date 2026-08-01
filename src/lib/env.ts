@@ -40,7 +40,18 @@ const schema = z.object({
   // Rewriting drafts. Optional throughout: without a key the Improve button is
   // absent and every other part of drafting works exactly as before.
   OPENAI_API_KEY: z.string().optional(),
-  OPENAI_MODEL: z.string().default('gpt-4o-mini'),
+  // Deliberately a capable model rather than the cheapest.
+  //
+  // At this app's volume the whole question is moot on cost: a rewrite is roughly
+  // 1,500 tokens in and 150 out, so thirty a day is a couple of million tokens a
+  // month. That is pennies on a budget model and a few pounds on a good one, and
+  // the output is the actual sentence a prospect reads. Optimising that for a
+  // saving smaller than a coffee is the wrong trade.
+  //
+  // What matters here is instruction-following, not eloquence: the prompt forbids
+  // claims outside the supplied facts and imposes a hard character limit, and a
+  // weaker model is likelier to quietly ignore both.
+  OPENAI_MODEL: z.string().default('gpt-5.6-terra'),
   SALESFORCE_CLIENT_ID: z.string().optional(),
   SALESFORCE_CLIENT_SECRET: z.string().optional(),
 })

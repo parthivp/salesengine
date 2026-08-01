@@ -223,6 +223,11 @@ export async function rewriteDraft(req: RewriteRequest): Promise<RewriteResult> 
     // 401 is a bad key and 429 with "insufficient_quota" is an empty account —
     // neither improves on retry, and both need the operator, not the scheduler.
     const outOfCredit = /insufficient_quota|billing/i.test(body)
+    // Model ids change, and a retired one comes back as a 404 whose body is not
+    // obviously about the model. Naming the setting saves an operator reading a
+    // raw API error to work out that OPENAI_MODEL is the thing to change.
+    const badModel = res.status === 404 || /model.*(not found|does not exist)/i.test(body)
+
     return {
       ok: false,
       error:
@@ -230,7 +235,9 @@ export async function rewriteDraft(req: RewriteRequest): Promise<RewriteResult> 
           ? 'OpenAI rejected the key. Check OPENAI_API_KEY.'
           : outOfCredit
             ? 'The OpenAI account has no credit. Add billing at platform.openai.com.'
-            : `OpenAI returned ${res.status}: ${body.slice(0, 200)}`,
+            : badModel
+              ? `OpenAI does not recognise the model "${env.OPENAI_MODEL}". Check OPENAI_MODEL against the current list at platform.openai.com/docs/models.`
+              : `OpenAI returned ${res.status}: ${body.slice(0, 200)}`,
       retryable: res.status === 429 && !outOfCredit,
     }
   }

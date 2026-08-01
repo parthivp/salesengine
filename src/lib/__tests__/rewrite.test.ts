@@ -4,7 +4,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 // would have no effect on the module under test. Mocked instead.
 const fakeEnv = {
   OPENAI_API_KEY: 'sk-test' as string | undefined,
-  OPENAI_MODEL: 'gpt-4o-mini',
+  OPENAI_MODEL: 'gpt-5.6-terra',
   // The logger reads NODE_ENV off the same object at import time.
   NODE_ENV: 'test',
 }
@@ -115,6 +115,16 @@ describe('rewriting a draft', () => {
     const broke = await rewriteDraft(BASE)
     expect(!broke.ok && broke.retryable).toBe(false)
     expect(!broke.ok && broke.error).toMatch(/no credit/)
+  })
+
+  it('names OPENAI_MODEL when the model id is wrong', async () => {
+    // Model ids change. A retired one comes back as a 404 whose body says nothing
+    // obvious about which setting to edit.
+    stubOpenAI('{"error":{"message":"The model `gpt-4o-mini` does not exist"}}', 404)
+    const r = await rewriteDraft(BASE)
+    expect(r.ok).toBe(false)
+    expect(!r.ok && r.error).toMatch(/OPENAI_MODEL/)
+    expect(!r.ok && r.error).toMatch(/gpt-5\.6-terra/)
   })
 
   it('retries ordinary rate limiting', async () => {

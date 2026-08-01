@@ -42,6 +42,8 @@ const KINDS = {
 const schema = z.object({
   kind: z.enum(['contact', 'account', 'sequence', 'template', 'deal']),
   ids: z.array(z.string().min(1)).min(1).max(500),
+  /** Options the dialog offered and the operator accepted. */
+  cascadeContacts: z.boolean().optional(),
 })
 
 export type DeleteResult =
@@ -53,7 +55,7 @@ export async function previewDelete(
 ): Promise<{ ok: true; preview: DeletePreview } | { ok: false; error: string }> {
   const parsed = schema.safeParse(input)
   if (!parsed.success) return { ok: false, error: 'Nothing selected.' }
-  const { kind, ids } = parsed.data
+  const { kind, ids, cascadeContacts } = parsed.data
 
   const auth = await requirePermission(KINDS[kind].permission)
 
@@ -61,7 +63,7 @@ export async function previewDelete(
     const preview = await withTenant(auth.tenant.id, async () => {
       switch (kind) {
         case 'contact': return previewContactDelete(ids)
-        case 'account': return previewAccountDelete(ids[0])
+        case 'account': return previewAccountDelete(ids[0], { cascadeContacts })
         case 'sequence': return previewSequenceDelete(ids[0])
         case 'template': return previewTemplateDelete(ids[0])
         case 'deal': return previewDealDelete(ids[0])
@@ -77,7 +79,7 @@ export async function previewDelete(
 export async function confirmDelete(input: z.input<typeof schema>): Promise<DeleteResult> {
   const parsed = schema.safeParse(input)
   if (!parsed.success) return { ok: false, error: 'Nothing selected.' }
-  const { kind, ids } = parsed.data
+  const { kind, ids, cascadeContacts } = parsed.data
 
   const auth = await requirePermission(KINDS[kind].permission)
 
@@ -97,7 +99,12 @@ export async function confirmDelete(input: z.input<typeof schema>): Promise<Dele
     const deleted = await withTenant(auth.tenant.id, async () => {
       switch (kind) {
         case 'contact': return (await deleteContacts(ids)).deleted
-        case 'account': await deleteAccount(ids[0]); return 1
+        case 'account': {
+          // Deleting the company's people counts as deleting them, so the number
+          // reported back is the number of records that actually went.
+          const r = await deleteAccount(ids[0], { cascadeContacts })
+          return 1 + r.contactsDeleted
+        }
         case 'sequence': await deleteSequence(ids[0]); return 1
         case 'template': await deleteTemplate(ids[0]); return 1
         case 'deal': await deleteDeal(ids[0]); return 1

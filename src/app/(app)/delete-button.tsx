@@ -35,6 +35,7 @@ export function DeleteButton({
 }) {
   const [open, setOpen] = useState(false)
   const [preview, setPreview] = useState<Awaited<ReturnType<typeof previewDelete>> | null>(null)
+  const [cascade, setCascade] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [pending, startTransition] = useTransition()
   const router = useRouter()
@@ -42,14 +43,30 @@ export function DeleteButton({
   function openDialog() {
     setError(null)
     setPreview(null)
+    setCascade(false)
     setOpen(true)
     startTransition(async () => setPreview(await previewDelete({ kind, ids })))
+  }
+
+  /**
+   * Re-previews when the option changes.
+   *
+   * Ticking "also delete the contacts" changes the cost by an order of magnitude
+   * — their timelines, their mail, their deals — so the confirmation has to
+   * restate it. An option that silently changes what a button does, without
+   * changing what the button says it will do, is worse than not offering it.
+   */
+  function setOption(next: boolean) {
+    setCascade(next)
+    startTransition(async () =>
+      setPreview(await previewDelete({ kind, ids, cascadeContacts: next }))
+    )
   }
 
   function run() {
     setError(null)
     startTransition(async () => {
-      const r = await confirmDelete({ kind, ids })
+      const r = await confirmDelete({ kind, ids, cascadeContacts: cascade })
       if (!r.ok) {
         setError(r.error)
         return
@@ -133,6 +150,18 @@ export function DeleteButton({
                         {p.sideEffects.map((s, i) => (
                           <p key={i} className="text-ink-500">{s}</p>
                         ))}
+
+                        {p.option && (
+                          <label className="flex items-start gap-2 rounded-lg border border-ink-200 p-2.5 cursor-pointer hover:bg-ink-50/60">
+                            <input
+                              type="checkbox"
+                              checked={cascade}
+                              onChange={(e) => setOption(e.target.checked)}
+                              className="mt-0.5 h-3.5 w-3.5 rounded border-ink-300 accent-red-600"
+                            />
+                            <span className="text-ink-700">{p.option.label}</span>
+                          </label>
+                        )}
 
                         <p className="text-ink-500">This cannot be undone.</p>
                       </>

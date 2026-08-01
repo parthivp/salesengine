@@ -38,6 +38,15 @@ export type DeletePreview = {
   sideEffects: string[]
   /** Non-empty means refuse: the caller shows these instead of a confirm button. */
   blockers: string[]
+  /**
+   * An offer the operator can accept, when there is a defensible answer either
+   * way and only they know which they mean.
+   *
+   * Deleting a company because the record was junk should take its people with
+   * it; deleting one because you have stopped tracking them should not. Guessing
+   * is wrong in half of all cases, so the dialog asks.
+   */
+  option?: { key: 'cascadeContacts'; label: string; count: number }
 }
 
 const plural = (n: number, one: string, many = `${one}s`) => (n === 1 ? one : many)
@@ -124,33 +133,72 @@ export async function deleteContacts(ids: string[]): Promise<{ deleted: number }
 // Accounts
 // ---------------------------------------------------------------------------
 
-export async function previewAccountDelete(id: string): Promise<DeletePreview> {
+export async function previewAccountDelete(
+  id: string,
+  opts: { cascadeContacts?: boolean } = {}
+): Promise<DeletePreview> {
   const account = await db().account.findUnique({ where: { id }, select: { name: true } })
-  const [contacts, deals, activities] = await Promise.all([
-    db().contact.count({ where: { accountId: id } }),
+  const people = await db().contact.findMany({ where: { accountId: id }, select: { id: true } })
+  const contacts = people.length
+  const [deals, activities] = await Promise.all([
     db().deal.count({ where: { accountId: id } }),
     db().activity.count({ where: { accountId: id } }),
   ])
+
+  // With the option taken, the real cost is the contacts' cost — their
+  // timelines, their mail, their deals — so the preview has to be theirs.
+  const cascaded = opts.cascadeContacts && contacts > 0
+    ? await previewContactDelete(people.map((p) => p.id))
+    : null
 
   return {
     label: account?.name ?? 'this account',
     alsoRemoved: [
       { what: plural(activities, 'timeline entry', 'timeline entries'), count: activities },
+      ...(cascaded
+        ? [{ what: plural(contacts, 'contact'), count: contacts }, ...cascaded.alsoRemoved]
+        : []),
     ].filter((x) => x.count > 0),
-    // Contacts and deals survive with no account rather than being destroyed —
-    // people at a company you stop tracking are still people you know.
-    sideEffects: [
-      contacts > 0
-        ? `${contacts} ${plural(contacts, 'contact')} will stay, without a company.`
-        : '',
-      deals > 0 ? `${deals} ${plural(deals, 'deal')} will stay, without a company.` : '',
-    ].filter(Boolean),
+    sideEffects: cascaded
+      ? cascaded.sideEffects
+      : [
+          // Default: contacts and deals survive with no company rather than being
+          // destroyed. People at a company you stop tracking are still people you know.
+          contacts > 0
+            ? `${contacts} ${plural(contacts, 'contact')} will stay, without a company.`
+            : '',
+          deals > 0 ? `${deals} ${plural(deals, 'deal')} will stay, without a company.` : '',
+        ].filter(Boolean),
     blockers: [],
+    option:
+      contacts > 0
+        ? {
+            key: 'cascadeContacts',
+            label: `Also delete the ${contacts} ${plural(contacts, 'contact')} at this company`,
+            count: contacts,
+          }
+        : undefined,
   }
 }
 
-export async function deleteAccount(id: string): Promise<void> {
+export async function deleteAccount(
+  id: string,
+  opts: { cascadeContacts?: boolean } = {}
+): Promise<{ contactsDeleted: number }> {
+  let contactsDeleted = 0
+
+  if (opts.cascadeContacts) {
+    const people = await db().contact.findMany({ where: { accountId: id }, select: { id: true } })
+    // Through deleteContacts, not a bare deleteMany: the suppression guard has to
+    // apply here too, or deleting a company is a way to un-unsubscribe everyone
+    // who works there.
+    if (people.length) {
+      contactsDeleted = (await deleteContacts(people.map((p) => p.id))).deleted
+    }
+  }
+
   await db().account.deleteMany({ where: { id } })
+  return { contactsDeleted }
 }
 
 // ---------------------------------------------------------------------------

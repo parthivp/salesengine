@@ -193,6 +193,16 @@ async function claimAndPrepare(
     return { kind: 'defer', until: new Date(Date.now() + 3_600_000), reason: 'sequence_not_active' }
   }
 
+  // Not due yet. The tick only ever fans out enrollments whose nextRunAt has
+  // passed, so reaching here means a duplicate or replayed job — and without this
+  // check, that job runs the *next* step the moment the previous one finished.
+  // The whole point of the delay between steps is that a follow-up an instant
+  // after the first mail reads as a machine; collapsing it is worse than the
+  // duplicate itself.
+  if (enrollment.nextRunAt && enrollment.nextRunAt.getTime() > Date.now()) {
+    return { kind: 'skip', reason: 'not_due' }
+  }
+
   // Lock: a stale lock is reclaimable so a crashed worker cannot wedge an
   // enrollment forever, but a fresh one means another worker holds it.
   if (enrollment.lockedAt && Date.now() - enrollment.lockedAt.getTime() < LOCK_STALE_MS) {

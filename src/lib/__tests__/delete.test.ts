@@ -139,6 +139,77 @@ describe('deleting an account', () => {
   })
 })
 
+describe('deleting an account and its people', () => {
+  it('offers the choice rather than guessing', async () => {
+    // Deleting a company because the record was junk should take its people;
+    // deleting one because you stopped tracking them should not. Either default
+    // is wrong half the time.
+    const a = await owner.account.create({ data: { tenantId, name: 'Junk Co', domain: 'j.test' } })
+    await contact({ accountId: a.id })
+    await contact({ accountId: a.id })
+
+    const p = await withTenant(tenantId, () => previewAccountDelete(a.id))
+    expect(p.option).toMatchObject({ key: 'cascadeContacts', count: 2 })
+    expect(p.option!.label).toMatch(/Also delete the 2 contacts/)
+  })
+
+  it('restates the cost when the option is taken', async () => {
+    const a = await owner.account.create({ data: { tenantId, name: 'Junk Co', domain: 'j2.test' } })
+    const c = await contact({ accountId: a.id })
+    await owner.activity.createMany({
+      data: [
+        { tenantId, type: 'note', summary: 'a', contactId: c.id },
+        { tenantId, type: 'note', summary: 'b', contactId: c.id },
+      ],
+    })
+
+    const off = await withTenant(tenantId, () => previewAccountDelete(a.id))
+    expect(off.sideEffects.join(' ')).toMatch(/will stay, without a company/)
+
+    const on = await withTenant(tenantId, () =>
+      previewAccountDelete(a.id, { cascadeContacts: true })
+    )
+    // The contacts' own collateral becomes the account's collateral.
+    expect(on.alsoRemoved).toEqual(
+      expect.arrayContaining([
+        { what: 'contact', count: 1 },
+        { what: 'timeline entries', count: 2 },
+      ])
+    )
+    expect(on.sideEffects.join(' ')).not.toMatch(/will stay/)
+  })
+
+  it('removes the people when asked', async () => {
+    const a = await owner.account.create({ data: { tenantId, name: 'Junk Co', domain: 'j3.test' } })
+    await contact({ accountId: a.id })
+    await contact({ accountId: a.id })
+
+    const r = await withTenant(tenantId, () => deleteAccount(a.id, { cascadeContacts: true }))
+    expect(r.contactsDeleted).toBe(2)
+    expect(await owner.contact.count({ where: { tenantId } })).toBe(0)
+    expect(await owner.account.count({ where: { id: a.id } })).toBe(0)
+  })
+
+  it('still preserves suppression when it cascades', async () => {
+    // Deleting a company must not become a way to un-unsubscribe everyone who
+    // works there.
+    const a = await owner.account.create({ data: { tenantId, name: 'Junk Co', domain: 'j4.test' } })
+    await contact({ accountId: a.id, email: 'gone@example.test', unsubscribedAt: new Date() })
+
+    await withTenant(tenantId, () => deleteAccount(a.id, { cascadeContacts: true }))
+    const entry = await owner.suppressionEntry.findFirstOrThrow({
+      where: { tenantId, value: 'gone@example.test' },
+    })
+    expect(entry.reason).toBe('unsubscribe')
+  })
+
+  it('offers nothing when the company has nobody', async () => {
+    const a = await owner.account.create({ data: { tenantId, name: 'Empty Co', domain: 'e.test' } })
+    const p = await withTenant(tenantId, () => previewAccountDelete(a.id))
+    expect(p.option).toBeUndefined()
+  })
+})
+
 describe('deleting a campaign', () => {
   async function campaign(status: 'active' | 'paused', enrol: number) {
     const s = await owner.sequence.create({

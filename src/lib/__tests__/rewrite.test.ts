@@ -158,7 +158,7 @@ describe('catching an invented number', () => {
   })
 
   it('leaves alone a number the operator or the record supplied', () => {
-    const req = {
+    const req: RewriteRequest = {
       ...BASE,
       rough: 'we cut their turnaround from 10 days to 3',
       facts: { ...BASE.facts, employeeCount: 17 },

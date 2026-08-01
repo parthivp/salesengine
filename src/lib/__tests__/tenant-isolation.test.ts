@@ -22,8 +22,19 @@ let acmeId: string
 let globexId: string
 
 beforeAll(async () => {
-  const acme = await owner.tenant.findUniqueOrThrow({ where: { slug: 'acme' } })
-  const globex = await owner.tenant.findUniqueOrThrow({ where: { slug: 'globex' } })
+  // The two tenants are upserted, not looked up. Assuming `db:seed` has run makes
+  // this suite fail on a freshly migrated database — and a green tick that depends
+  // on demo data being present is not evidence that isolation holds.
+  const acme = await owner.tenant.upsert({
+    where: { slug: 'acme' },
+    update: {},
+    create: { slug: 'acme', name: 'Acme Corp' },
+  })
+  const globex = await owner.tenant.upsert({
+    where: { slug: 'globex' },
+    update: {},
+    create: { slug: 'globex', name: 'Globex Corporation' },
+  })
   acmeId = acme.id
   globexId = globex.id
 

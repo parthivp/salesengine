@@ -6,7 +6,10 @@ import { PrismaClient } from '@prisma/client'
  * business. They talk to a real Postgres with RLS applied — mocking here would
  * test nothing, since the property under test is enforced by the database.
  *
- * Requires: docker compose -f docker-compose.dev.yml up -d && npm run db:deploy && npm run db:seed
+ * Requires a migrated database. The fixtures these assertions need are created
+ * here rather than assumed from `db:seed` — a test that fails because somebody
+ * tidied up a demo record is a test that gets ignored, and this is the one suite
+ * that must never be ignored.
  */
 
 const appUrl = process.env.DATABASE_URL!
@@ -23,6 +26,23 @@ beforeAll(async () => {
   const globex = await owner.tenant.findUniqueOrThrow({ where: { slug: 'globex' } })
   acmeId = acme.id
   globexId = globex.id
+
+  // The record the cross-tenant reads are checked against. Upserted so the suite
+  // is idempotent and independent of whatever else is in the database.
+  await owner.account.upsert({
+    where: { tenantId_domain: { tenantId: globexId, domain: 'globex-secret.test' } },
+    update: {},
+    create: { tenantId: globexId, name: 'Globex Secret Holdings', domain: 'globex-secret.test' },
+  })
+
+  // Both tenants need at least one user for the "only its own users" assertions.
+  for (const [tenantId, email] of [[acmeId, 'iso-acme@test.local'], [globexId, 'iso-globex@test.local']] as const) {
+    await owner.user.upsert({
+      where: { tenantId_email: { tenantId, email } },
+      update: {},
+      create: { tenantId, email, name: 'Isolation Fixture', role: 'rep', status: 'active' },
+    })
+  }
 })
 
 /** Mirrors withTenant() without importing the Next-coupled module. */

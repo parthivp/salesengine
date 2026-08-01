@@ -3,6 +3,7 @@ import { notFound } from 'next/navigation'
 import { requirePermission } from '@/lib/auth'
 import { withTenant, db } from '@/lib/db'
 import { PageHeader, Card, Badge, EmptyState } from '@/components/ui'
+import { DeleteButton } from '../../delete-button'
 import { displayName, formatNumber, formatRelative } from '@/lib/utils'
 import { scoreBand } from '@/lib/leads/scoring'
 import { ArrowLeft, Globe, Linkedin, MapPin, Users, Briefcase } from 'lucide-react'
@@ -55,7 +56,12 @@ export default async function AccountDetailPage({
       <PageHeader
         title={account.name}
         description={account.industry ?? undefined}
-        action={<Badge>{contacts.length} contact{contacts.length === 1 ? '' : 's'}</Badge>}
+        action={
+          <div className="flex items-center gap-2">
+            <Badge>{contacts.length} contact{contacts.length === 1 ? '' : 's'}</Badge>
+            <DeleteButton kind="account" ids={[account.id]} onDeleted="/accounts" />
+          </div>
+        }
       />
 
       <div className="grid gap-6 lg:grid-cols-3">

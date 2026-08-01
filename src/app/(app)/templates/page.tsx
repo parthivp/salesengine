@@ -7,6 +7,7 @@ import { AVAILABLE_TAGS, unknownTags } from '@/lib/email/merge'
 import { Mail } from 'lucide-react'
 import { TemplateComposer } from './composer'
 import { rewriteEnabled } from '@/lib/ai/rewrite'
+import { DeleteButton } from '../delete-button'
 
 export const metadata = { title: 'Templates · SalesEngine' }
 export const dynamic = 'force-dynamic'
@@ -89,6 +90,7 @@ export default async function TemplatesPage() {
                         >
                           {lint.blocking || bad.length ? 'needs work' : lint.score > 20 ? 'risky' : 'clean'}
                         </Badge>
+                        <DeleteButton kind="template" ids={[t.id]} />
                       </div>
                       <p className="mt-1 text-xs text-ink-400">
                         Updated {formatRelative(t.updatedAt)}

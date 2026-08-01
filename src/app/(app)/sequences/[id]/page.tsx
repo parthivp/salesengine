@@ -3,6 +3,7 @@ import { notFound } from 'next/navigation'
 import { requirePermission } from '@/lib/auth'
 import { withTenant, db } from '@/lib/db'
 import { PageHeader, Card, Badge, StatTile } from '@/components/ui'
+import { DeleteButton } from '../../delete-button'
 import { campaignFunnel } from '@/lib/sequences/funnel'
 import type { StepCondition } from '@/lib/sequences/conditions'
 import { formatNumber, formatRelative } from '@/lib/utils'
@@ -111,12 +112,15 @@ export default async function SequenceDetailPage({
         title={sequence.name}
         description={sequence.description ?? undefined}
         action={
-          <SequenceControls
-            sequenceId={sequence.id}
-            status={sequence.status}
-            stepCount={sequence.steps.length}
-            mailboxCount={mailboxes}
-          />
+          <div className="flex items-center gap-2">
+            <SequenceControls
+              sequenceId={sequence.id}
+              status={sequence.status}
+              stepCount={sequence.steps.length}
+              mailboxCount={mailboxes}
+            />
+            <DeleteButton kind="sequence" ids={[sequence.id]} onDeleted="/sequences" />
+          </div>
         }
       />
 

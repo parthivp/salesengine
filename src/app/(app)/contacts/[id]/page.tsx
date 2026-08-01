@@ -3,6 +3,7 @@ import { notFound } from 'next/navigation'
 import { requirePermission } from '@/lib/auth'
 import { withTenant, db } from '@/lib/db'
 import { PageHeader, Card, Badge } from '@/components/ui'
+import { DeleteButton } from '../../delete-button'
 import { displayName, formatRelative, formatNumber, initials } from '@/lib/utils'
 import { scoreBand, computeScore, daysSince } from '@/lib/leads/scoring'
 import { ArrowLeft, Mail, Phone, Linkedin, Building2, MapPin } from 'lucide-react'
@@ -92,6 +93,7 @@ export default async function ContactDetailPage({
               {band.label} · {contact.score}
             </Badge>
             <Badge>{contact.status.replace(/_/g, ' ')}</Badge>
+            <DeleteButton kind="contact" ids={[contact.id]} onDeleted="/contacts" />
           </div>
         }
       />

@@ -1,13 +1,14 @@
 import Link from 'next/link'
 import { requirePermission } from '@/lib/auth'
 import { withTenant, db } from '@/lib/db'
-import { ownerFilter } from '@/lib/rbac'
-import { PageHeader, Card, Badge, EmptyState } from '@/components/ui'
+import { ownerFilter, can } from '@/lib/rbac'
+import { PageHeader, Card, EmptyState } from '@/components/ui'
 import { displayName, formatRelative, formatNumber } from '@/lib/utils'
 import { scoreBand } from '@/lib/leads/scoring'
 import type { Prisma, ContactStatus } from '@prisma/client'
 import { Users, Upload } from 'lucide-react'
 import { ContactFilters } from './filters'
+import { ContactsTable } from './table'
 
 export const metadata = { title: 'Contacts · SalesEngine' }
 export const dynamic = 'force-dynamic'
@@ -120,63 +121,26 @@ export default async function ContactsPage({
           />
         ) : (
           <>
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="text-left text-xs uppercase tracking-wide text-ink-400 border-b border-ink-100">
-                    <th className="px-5 py-2.5 font-medium">Contact</th>
-                    <th className="px-5 py-2.5 font-medium">Company</th>
-                    <th className="px-5 py-2.5 font-medium">Status</th>
-                    <th className="px-5 py-2.5 font-medium">Score</th>
-                    <th className="px-5 py-2.5 font-medium">Owner</th>
-                    <th className="px-5 py-2.5 font-medium">Added</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-ink-100">
-                  {contacts.map((c) => {
-                    const band = scoreBand(c.score)
-                    return (
-                      <tr key={c.id} className="hover:bg-ink-50/60">
-                        <td className="px-5 py-3">
-                          <Link href={`/contacts/${c.id}`} className="group block">
-                            <p className="font-medium text-ink-900 group-hover:text-brand-700 truncate">
-                              {displayName(c)}
-                            </p>
-                            <p className="text-xs text-ink-500 truncate">
-                              {c.title ? `${c.title} · ` : ''}
-                              {c.email ?? 'no email'}
-                            </p>
-                          </Link>
-                        </td>
-                        <td className="px-5 py-3">
-                          {c.account ? (
-                            <Link
-                              href={`/accounts/${c.account.id}`}
-                              className="text-ink-700 hover:text-brand-700"
-                            >
-                              {c.account.name}
-                            </Link>
-                          ) : (
-                            <span className="text-ink-400">—</span>
-                          )}
-                        </td>
-                        <td className="px-5 py-3">
-                          <Badge tone={STATUS_TONE[c.status]}>{c.status.replace(/_/g, ' ')}</Badge>
-                        </td>
-                        <td className="px-5 py-3">
-                          <span className="inline-flex items-center gap-1.5">
-                            <span className="tabular-nums font-medium text-ink-900">{c.score}</span>
-                            <Badge tone={band.tone}>{band.label}</Badge>
-                          </span>
-                        </td>
-                        <td className="px-5 py-3 text-ink-600">{c.owner?.name ?? 'Unassigned'}</td>
-                        <td className="px-5 py-3 text-ink-500">{formatRelative(c.createdAt)}</td>
-                      </tr>
-                    )
-                  })}
-                </tbody>
-              </table>
-            </div>
+            <ContactsTable
+              canDelete={can(auth.user.role, 'contact:delete')}
+              rows={contacts.map((c) => {
+                const band = scoreBand(c.score)
+                return {
+                  id: c.id,
+                  name: displayName(c),
+                  sub: `${c.title ? `${c.title} · ` : ''}${c.email ?? 'no email'}`,
+                  accountId: c.account?.id ?? null,
+                  accountName: c.account?.name ?? null,
+                  status: c.status.replace(/_/g, ' '),
+                  statusTone: STATUS_TONE[c.status],
+                  score: c.score,
+                  bandLabel: band.label,
+                  bandTone: band.tone,
+                  owner: c.owner?.name ?? 'Unassigned',
+                  added: formatRelative(c.createdAt),
+                }
+              })}
+            />
 
             {pages > 1 && (
               <div className="flex items-center justify-between px-5 py-3 border-t border-ink-100 text-sm">

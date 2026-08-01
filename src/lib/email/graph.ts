@@ -380,8 +380,20 @@ export async function verifyGraphAccess(
 
   let res: Response
   try {
+    // Probe a *mail* endpoint, not a directory one.
+    //
+    // This used to call `/users/{mailbox}`, which reads the directory and needs
+    // User.Read.All — a permission this app has no business holding and the setup
+    // guide never asks for. So a registration with exactly the right permissions,
+    // Mail.Read and Mail.Send, was refused at the door, and the 403 was reported
+    // as a consent problem. The operator then re-granted consent that was already
+    // correct, repeatedly.
+    //
+    // The inbox folder is the honest test: it is covered by Mail.Read, it is the
+    // folder the poller actually reads, and it fails for the same reasons polling
+    // would.
     res = await fetch(
-      `${GRAPH}/users/${encodeURIComponent(creds.mailbox)}?$select=displayName,mail,userPrincipalName`,
+      `${GRAPH}/users/${encodeURIComponent(creds.mailbox)}/mailFolders/inbox?$select=displayName,totalItemCount`,
       { headers: { authorization: `Bearer ${token}` } }
     )
   } catch (err) {
@@ -428,13 +440,16 @@ export async function verifyGraphAccess(
     return { ok: false, error: `Graph returned ${res.status}: ${(await res.text()).slice(0, 200)}` }
   }
 
-  const user = (await res.json()) as { displayName?: string }
+  // The folder's displayName is "Inbox", which is no use as a label. The mailbox
+  // address is what identifies this connection to a human, and unlike the account
+  // holder's name it needs no directory permission to know.
+  await res.json().catch(() => ({}))
   const roles = grantedRoles(token)
 
   return {
     ok: true,
     result: {
-      displayName: user.displayName ?? creds.mailbox,
+      displayName: creds.mailbox,
       roles,
       // Reaching the mailbox at all proves read access, whatever the claim says.
       canRead: true,

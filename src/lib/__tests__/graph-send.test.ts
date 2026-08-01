@@ -326,3 +326,61 @@ describe('a 403 from Graph', () => {
     expect(!r.ok && r.error).toMatch(/User\.Read\.All/)
   })
 })
+
+describe('what verification actually probes', () => {
+  it('reads a mail folder, not the directory', async () => {
+    // The bug this replaces: verification called GET /users/{mailbox}, which is a
+    // directory read requiring User.Read.All. A registration holding exactly the
+    // right permissions — Mail.Read and Mail.Send — was refused, and the 403 was
+    // reported as a consent failure. The operator re-granted correct consent
+    // repeatedly and nothing changed.
+    const { verifyGraphAccess } = await import('../email/graph')
+    const urls: string[] = []
+    vi.stubGlobal('fetch', async (url: string) => {
+      urls.push(String(url))
+      if (String(url).includes('/oauth2/v2.0/token')) {
+        return new Response(
+          JSON.stringify({
+            access_token: ['h', Buffer.from(JSON.stringify({ roles: ['Mail.Read'] })).toString('base64url'), 's'].join('.'),
+            expires_in: 3600,
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } }
+        )
+      }
+      return new Response(JSON.stringify({ displayName: 'Inbox', totalItemCount: 12 }), {
+        status: 200, headers: { 'content-type': 'application/json' },
+      })
+    })
+
+    const r = await verifyGraphAccess({ ...CREDS, clientId: 'app-probe' })
+    expect(r.ok).toBe(true)
+
+    const graphCall = urls.find((u) => u.includes('graph.microsoft.com'))!
+    expect(graphCall).toContain('/mailFolders/inbox')
+    // The directory endpoint is `/users/{id}` with no path after it.
+    expect(graphCall).not.toMatch(/\/users\/[^/]+\?/)
+  })
+
+  it('labels the connection by mailbox, not by a name it cannot read', async () => {
+    // The folder is called "Inbox", and the account holder's name needs
+    // User.Read.All. The address identifies the connection and costs nothing.
+    const { verifyGraphAccess } = await import('../email/graph')
+    vi.stubGlobal('fetch', async (url: string) =>
+      String(url).includes('/oauth2/v2.0/token')
+        ? new Response(
+            JSON.stringify({
+              access_token: ['h', Buffer.from(JSON.stringify({ roles: ['Mail.Read', 'Mail.Send'] })).toString('base64url'), 's'].join('.'),
+              expires_in: 3600,
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } }
+          )
+        : new Response(JSON.stringify({ displayName: 'Inbox' }), {
+            status: 200, headers: { 'content-type': 'application/json' },
+          })
+    )
+
+    const r = await verifyGraphAccess({ ...CREDS, clientId: 'app-label' })
+    expect(r.ok && r.result.displayName).toBe(CREDS.mailbox)
+    expect(r.ok && r.result.canSend).toBe(true)
+  })
+})

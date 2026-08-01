@@ -357,13 +357,21 @@ export async function verifyGraphAccess(
   try {
     token = await accessToken(creds)
   } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : 'Could not get a token from Entra.' }
+    return { ok: false, error: explainFetchError(err) }
   }
 
-  const res = await fetch(
-    `${GRAPH}/users/${encodeURIComponent(creds.mailbox)}?$select=displayName,mail,userPrincipalName`,
-    { headers: { authorization: `Bearer ${token}` } }
-  )
+  let res: Response
+  try {
+    res = await fetch(
+      `${GRAPH}/users/${encodeURIComponent(creds.mailbox)}?$select=displayName,mail,userPrincipalName`,
+      { headers: { authorization: `Bearer ${token}` } }
+    )
+  } catch (err) {
+    // Unguarded, this threw past the caller, which reported "Verified, but could
+    // not save those settings" — describing a database problem for what is a
+    // network one.
+    return { ok: false, error: explainFetchError(err) }
+  }
 
   if (res.status === 403) {
     return {
@@ -398,6 +406,41 @@ export async function verifyGraphAccess(
 // ---------------------------------------------------------------------------
 // Sending
 // ---------------------------------------------------------------------------
+
+/**
+ * Unwraps what actually went wrong.
+ *
+ * Node's fetch reports every transport failure as the string "fetch failed" and
+ * hides the reason on `err.cause` — often nested one more level. Surfacing only
+ * the top line told an operator staring at a correct client ID and a correct
+ * secret precisely nothing, when the real answer was that the container could not
+ * resolve `login.microsoftonline.com`. A DNS failure and a wrong secret need
+ * completely different responses, and "fetch failed" distinguishes neither.
+ */
+export function explainFetchError(err: unknown): string {
+  if (!(err instanceof Error)) return String(err)
+
+  const chain: string[] = []
+  let current: unknown = err
+  for (let depth = 0; depth < 5 && current instanceof Error; depth++) {
+    const code = (current as { code?: string }).code
+    const part = code && !current.message.includes(code) ? `${current.message} (${code})` : current.message
+    if (part && !chain.includes(part)) chain.push(part)
+    current = (current as { cause?: unknown }).cause
+  }
+
+  const detail = chain.join(' — ')
+  if (!/fetch failed|network|ENOTFOUND|EAI_AGAIN|ECONN|ETIMEDOUT|certificate/i.test(detail)) {
+    return detail
+  }
+
+  // Network-shaped: say what to check, because the credentials are not the issue.
+  return (
+    `${detail}. The app could not reach Microsoft — this is a network problem, not a ` +
+    `credentials one. Check that the container has outbound HTTPS and DNS to ` +
+    `login.microsoftonline.com and graph.microsoft.com.`
+  )
+}
 
 export type GraphSendResult =
   | { ok: true; internetMessageId: string }
@@ -472,7 +515,7 @@ export async function sendViaGraph(
     // revoked — and fails identically on retry.
     return {
       ok: false,
-      error: err instanceof Error ? err.message : 'Could not get a Graph access token',
+      error: explainFetchError(err),
       retryable: false,
     }
   }

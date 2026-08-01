@@ -222,3 +222,40 @@ describe('reading granted permissions from the token', () => {
     expect(grantedRoles(`h.${payload}.s`)).toEqual(['Mail.ReadWrite'])
   })
 })
+
+describe('explaining a failed request', () => {
+  it('digs the real reason out of the cause chain', async () => {
+    const { explainFetchError } = await import('../email/graph')
+    // What Node actually produces when DNS fails inside a container.
+    const dns = Object.assign(new Error('getaddrinfo EAI_AGAIN login.microsoftonline.com'), {
+      code: 'EAI_AGAIN',
+    })
+    const err = Object.assign(new TypeError('fetch failed'), { cause: dns })
+
+    const out = explainFetchError(err)
+    expect(out).toContain('EAI_AGAIN')
+    expect(out).toContain('login.microsoftonline.com')
+    // And says which of the two possible problems it is, because "fetch failed"
+    // sends people back to re-check a client secret that was never wrong.
+    expect(out).toMatch(/network problem, not a credentials one/)
+  })
+
+  it('leaves a real Entra rejection alone', async () => {
+    const { explainFetchError } = await import('../email/graph')
+    const out = explainFetchError(new Error('Entra returned 401: invalid_client'))
+    expect(out).toBe('Entra returned 401: invalid_client')
+    expect(out).not.toMatch(/network problem/)
+  })
+
+  it('does not loop forever on a self-referential cause', async () => {
+    const { explainFetchError } = await import('../email/graph')
+    const a = new Error('a')
+    ;(a as { cause?: unknown }).cause = a
+    expect(explainFetchError(a)).toBe('a')
+  })
+
+  it('handles something that is not an Error at all', async () => {
+    const { explainFetchError } = await import('../email/graph')
+    expect(explainFetchError('boom')).toBe('boom')
+  })
+})

@@ -77,17 +77,39 @@ In [Exchange Online PowerShell](https://learn.microsoft.com/en-us/powershell/exc
 ```powershell
 Connect-ExchangeOnline
 
-# A group holding only the mailboxes this app may read
+New-ApplicationAccessPolicy `
+  -AppId "<Application (client) ID>" `
+  -PolicyScopeGroupId sales@yourdomain.com `
+  -AccessRight RestrictAccess `
+  -Description "SalesEngine may use only this mailbox"
+```
+
+`-PolicyScopeGroupId` takes the mailbox address itself. For a single mailbox that
+is the whole job — no group to create, nothing to wait for.
+
+**If you want more than one mailbox**, it takes a **mail-enabled security group**,
+which has to exist and be resolvable *before* the policy is created:
+
+```powershell
 New-DistributionGroup -Name "SalesEngine Mailboxes" `
   -Type Security -Alias salesengine-mailboxes `
-  -Members "you@yourdomain.com"
+  -Members "sales@yourdomain.com"
+
+# Confirm it resolves before going further — a new group can take a while to
+# appear, and until it does the policy command fails with
+# "The identity of the policy scope could not be resolved."
+Get-DistributionGroup -Identity salesengine-mailboxes
 
 New-ApplicationAccessPolicy `
   -AppId "<Application (client) ID>" `
   -PolicyScopeGroupId salesengine-mailboxes@yourdomain.com `
   -AccessRight RestrictAccess `
-  -Description "SalesEngine may read only these mailboxes"
+  -Description "SalesEngine may use only these mailboxes"
 ```
+
+A plain security group or a distribution list will not work — it must be
+**mail-enabled security**, which is what `-Type Security` on
+`New-DistributionGroup` produces.
 
 Confirm it took effect:
 
@@ -125,6 +147,8 @@ hundreds of tasks.
 |---|---|
 | `invalid_client` from Entra | Wrong secret, or you copied the Secret ID instead of the Value. |
 | `unauthorized_client` | The app is not in this tenant, or the directory ID is wrong. |
+| "The identity of the policy scope could not be resolved" | `-PolicyScopeGroupId` names something Exchange cannot find. Use the mailbox address itself for a single mailbox. If you meant a group, it must be **mail-enabled security** and must already resolve — check with `Get-DistributionGroup`. |
+| "Read-only: Mail.Send was not granted" on connecting | The registration has `Mail.Read` but not `Mail.Send`. Replies and acceptance tracking work; sequences will log instead of sending. Add the permission, grant consent, reconnect. |
 | "Authenticated, but denied access to that mailbox" | Admin consent was not granted, **or** an Application Access Policy excludes it. Run `Test-ApplicationAccessPolicy` to tell the two apart. |
 | "No mailbox found" | The address does not resolve in that tenant. Use the full UPN. |
 | Worked, then stopped weeks later | The client secret expired. Create a new one and reconnect. |
